@@ -103,4 +103,30 @@ router.get('/realtime/:period', async (req, res, next) => {
   }
 });
 
+// GET /api/sales/realtime
+router.get('/realtime', async (req, res) => {
+  try {
+    const { since } = req.query;
+    const query = since ? { createdAt: { $gte: new Date(since) } } : {};
+
+    const results = await mongoose.connection.db
+      .collection('RealTime_Transactions')
+      .find(query)
+      .sort({ createdAt: -1 })
+      .toArray();
+
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('❌ Realtime API error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+
 module.exports = router;
