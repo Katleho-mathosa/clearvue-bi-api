@@ -2,120 +2,84 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// GET all customer segments
-router.get('/segments', async (req, res) => {
+// Helper for consistent responses
+const sendResponse = (res, data, page = 1, limit = 0) => {
+  res.json({
+    success: true,
+    data,
+    meta: {
+      total: data.length,
+      page: parseInt(page),
+      limit: parseInt(limit)
+    }
+  });
+};
+
+// GET all customers (with optional pagination)
+router.get('/', async (req, res) => {
   try {
-    const pipeline = [
-      {
-        $lookup: {
-          from: 'Sales_Header',
-          localField: 'CUSTOMER_NUMBER',
-          foreignField: 'CUSTOMER_NUMBER',
-          as: 'sales'
-        }
-      },
-      { $unwind: '$sales' },
-      {
-        $lookup: {
-          from: 'Sales_Line',
-          localField: 'sales.DOC_NUMBER',
-          foreignField: 'DOC_NUMBER',
-          as: 'line_items'
-        }
-      },
-      { $unwind: '$line_items' },
-      {
-        $group: {
-          _id: '$CUSTOMER_NUMBER',
-          totalRevenue: { $sum: '$line_items.TOTAL_LINE_PRICE' },
-          transactionCount: { $sum: 1 },
-          averageOrderValue: { $avg: '$line_items.TOTAL_LINE_PRICE' },
-          region: { $first: '$REGION_CODE' }
-        }
-      },
-      {
-        $addFields: {
-          segment: {
-            $switch: {
-              branches: [
-                { case: { $gte: ['$totalRevenue', 50000] }, then: 'High Value' },
-                { case: { $gte: ['$totalRevenue', 10000] }, then: 'Medium Value' }
-              ],
-              default: 'Low Value'
-            }
-          }
-        }
-      },
-      { $sort: { totalRevenue: -1 } }
-    ];
-
-    const results = await mongoose.connection.db
-      .collection('Customer')
-      .aggregate(pipeline)
+    const { limit = 50, page = 1 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const results = await mongoose.connection.db.collection('Customer_Regions')
+      .find({})
+      .skip(skip)
+      .limit(parseInt(limit))
       .toArray();
-
-    res.json({ success: true, data: results, total: results.length });
+    sendResponse(res, results, page, limit);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// GET customers by segment
-router.get('/segments/:segment', async (req, res) => {
+// GET customer segments
+router.get('/segments', async (req, res) => {
   try {
-    const { segment } = req.params;
+    const results = await mongoose.connection.db.collection('Customer_Categories').find({}).toArray();
+    sendResponse(res, results);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-    const pipeline = [
-      {
-        $lookup: {
-          from: 'Sales_Header',
-          localField: 'CUSTOMER_NUMBER',
-          foreignField: 'CUSTOMER_NUMBER',
-          as: 'sales'
-        }
-      },
-      { $unwind: '$sales' },
-      {
-        $lookup: {
-          from: 'Sales_Line',
-          localField: 'sales.DOC_NUMBER',
-          foreignField: 'DOC_NUMBER',
-          as: 'line_items'
-        }
-      },
-      { $unwind: '$line_items' },
-      {
-        $group: {
-          _id: '$CUSTOMER_NUMBER',
-          totalRevenue: { $sum: '$line_items.TOTAL_LINE_PRICE' },
-          transactionCount: { $sum: 1 },
-          averageOrderValue: { $avg: '$line_items.TOTAL_LINE_PRICE' },
-          region: { $first: '$REGION_CODE' }
-        }
-      },
-      {
-        $addFields: {
-          segment: {
-            $switch: {
-              branches: [
-                { case: { $gte: ['$totalRevenue', 50000] }, then: 'High Value' },
-                { case: { $gte: ['$totalRevenue', 10000] }, then: 'Medium Value' }
-              ],
-              default: 'Low Value'
-            }
-          }
-        }
-      },
-      { $match: { segment: segment } },
-      { $sort: { totalRevenue: -1 } }
-    ];
+// GET top customers by payments
+router.get('/top-payments', async (req, res) => {
+  try {
+    const results = await mongoose.connection.db.collection('Payment_Lines').aggregate([
+      { $set: { totalPayment: { $toDouble: { $ifNull: ["$Tot_Payment", 0] } } } },
+      { $group: { _id: "$Customer_number", totalPaid: { $sum: "$totalPayment" }, transactionCount: { $sum: 1 } } },
+      { $sort: { totalPaid: -1 } },
+      { $limit: 10 }
+    ]).toArray();
+    sendResponse(res, results);
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
-    const results = await mongoose.connection.db
-      .collection('Customer')
-      .aggregate(pipeline)
-      .toArray();
-
-    res.json({ success: true, data: results, total: results.length });
+// GET customer age analysis
+router.get('/age-analysis', async (req, res) => {
+  try {
+    const results = await mongoose.connection.db.collection('Age_Analysis').aggregate([
+      {
+        $project: {
+          Customer_number: 1,
+          FIN_Period: 1,
+          Total_Due: 1,
+          Amt_Current: 1,
+          Amt_30_Days: 1,
+          Amt_60_Days: 1,
+          Amt_90_Days: 1,
+          Amt_120_Days: 1,
+          Amt_150_Days: 1,
+          Amt_180_Days: 1,
+          Amt_210_Days: 1,
+          Amt_240_Days: 1,
+          Amt_270_Days: 1,
+          Amt_300_Days: 1
+        }
+      }
+    ]).toArray();
+    sendResponse(res, results);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
