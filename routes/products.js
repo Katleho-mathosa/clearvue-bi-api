@@ -81,3 +81,5 @@ router.get('/top-categories', async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+module.exports = router;
