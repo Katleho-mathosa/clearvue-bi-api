@@ -128,5 +128,29 @@ router.get('/realtime', async (req, res) => {
   }
 });
 
+// GET /api/sales/overview
+router.get('/overview', async (req, res) => {
+  try {
+    const periods = await mongoose.connection.db
+      .collection('sales_summary_period')
+      .find({})
+      .toArray();
+
+    const regions = await mongoose.connection.db
+      .collection('sales_summary_region')
+      .find({})
+      .toArray();
+
+    res.json({
+      success: true,
+      data: {
+        periods,
+        regions
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 module.exports = router;
