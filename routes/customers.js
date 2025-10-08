@@ -8,14 +8,14 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
     success: true,
     data,
     meta: {
-      total: data.length,
+      total: Array.isArray(data) ? data.length : (data ? 1 : 0),
       page: parseInt(page),
       limit: parseInt(limit)
     }
   });
 };
 
-// GET all customers (with optional pagination)
+// GET all customers (with optional pagination) - returns customer regions collection by default
 router.get('/', async (req, res) => {
   try {
     const { limit = 50, page = 1 } = req.query;
@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET customer segments
+// GET customer segments (categories)
 router.get('/segments', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Customer_Categories').find({}).toArray();
@@ -41,15 +41,25 @@ router.get('/segments', async (req, res) => {
   }
 });
 
-// GET top customers by payments
+// GET top customers by payments (Payment_Lines)
 router.get('/top-payments', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Payment_Lines').aggregate([
-      { $set: { totalPayment: { $toDouble: { $ifNull: ["$Tot_Payment", 0] } } } },
-      { $group: { _id: "$Customer_number", totalPaid: { $sum: "$totalPayment" }, transactionCount: { $sum: 1 } } },
+      {
+        $addFields: {
+          totalPayment: { $toDouble: { $ifNull: ["$TOT_PAYMENT", "$Tot_Payment", 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$CUSTOMER_NUMBER",
+          totalPaid: { $sum: "$totalPayment" },
+          transactionCount: { $sum: 1 }
+        }
+      },
       { $sort: { totalPaid: -1 } },
       { $limit: 10 }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
     sendResponse(res, results);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

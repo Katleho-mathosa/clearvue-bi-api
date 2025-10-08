@@ -8,7 +8,7 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
     success: true,
     data,
     meta: {
-      total: data.length,
+      total: Array.isArray(data) ? data.length : (data ? 1 : 0),
       page: parseInt(page),
       limit: parseInt(limit)
     }
@@ -16,7 +16,7 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
 };
 
 // ==========================================================
-// EXISTING ENDPOINTS
+// EXISTING ENDPOINTS (kept & fixed to match provided field names)
 // ==========================================================
 
 // GET /api/sales/periods?start=YYYYMM&end=YYYYMM&sort=-1&limit=12&page=1
@@ -63,40 +63,58 @@ router.get('/regions', async (req, res, next) => {
 });
 
 // GET /api/sales/realtime/:period?region=REGION_CODE
+// Corrected to use field names you provided
 router.get('/realtime/:period', async (req, res, next) => {
   try {
     const { period } = req.params;
     const { region } = req.query;
 
     const pipeline = [
-      { $match: { FIN_period: parseInt(period) } },
+      { $match: { FIN_PERIOD: parseInt(period) } },
       {
         $lookup: {
           from: "Sales_Line",
-          localField: "Doc_number",
-          foreignField: "Doc_Number",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
           as: "line_items"
         }
       },
-      { $unwind: "$line_items" }
+      { $unwind: { path: "$line_items", preserveNullAndEmptyArrays: false } }
     ];
 
+    // optional region filter on header
     if (region) {
-      pipeline.push({ $match: { REGION_CODE: region } });
+      pipeline.unshift({ $match: { FIN_PERIOD: parseInt(period), Region_code: region } });
     }
+
+    // normalize numeric line fields and sum
+    pipeline.push({
+      $addFields: {
+        lineValue: {
+          $toDouble: {
+            $ifNull: ["$line_items.TOTAL_LINE_PRICE", "$line_items.LINE_TOTAL", 0]
+          }
+        },
+        lineQty: {
+          $toDouble: {
+            $ifNull: ["$line_items.QUANTITY", "$line_items.QTY", 0]
+          }
+        }
+      }
+    });
 
     pipeline.push({
       $group: {
         _id: null,
-        totalRevenue: { $sum: "$line_items.Total_Line_Price" },
-        totalQuantity: { $sum: "$line_items.Quantity" },
+        totalRevenue: { $sum: "$lineValue" },
+        totalQuantity: { $sum: "$lineQty" },
         transactionCount: { $sum: 1 }
       }
     });
 
     const results = await mongoose.connection.db
       .collection('Sales_Header')
-      .aggregate(pipeline)
+      .aggregate(pipeline, { allowDiskUse: true })
       .toArray();
 
     sendResponse(res, results[0] ? [results[0]] : []);
@@ -105,16 +123,15 @@ router.get('/realtime/:period', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/realtime
+// GET /api/sales/realtime (simulated realtime transactions)
 router.get('/realtime', async (req, res) => {
   try {
     const { since } = req.query;
-    const query = since ? { createdAt: { $gte: new Date(since) } } : {};
-
+    const query = since ? { Deposit_date: { $gte: new Date(since) } } : {};
     const results = await mongoose.connection.db
       .collection('RealTime_Transactions')
       .find(query)
-      .sort({ createdAt: -1 })
+      .sort({ Deposit_date: -1 })
       .toArray();
 
     res.json({ success: true, data: results });
@@ -136,10 +153,19 @@ router.get('/overview', async (req, res) => {
 });
 
 // GET /api/sales/top-products
+// corrected to use provided field names and fallbacks
 router.get('/top-products', async (req, res) => {
   try {
     const result = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      { $group: { _id: "$Inventory_code", totalSales: { $sum: "$Total_Line_Price" }, totalQty: { $sum: "$Quantity" } } },
+      {
+        $addFields: {
+          lineValue: {
+            $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", "$LINE_TOTAL", 0] }
+          },
+          qty: { $toDouble: { $ifNull: ["$QUANTITY", "$QTY", 0] } }
+        }
+      },
+      { $group: { _id: "$INVENTORY_CODE", totalSales: { $sum: "$lineValue" }, totalQty: { $sum: "$qty" } } },
       { $sort: { totalSales: -1 } },
       { $limit: 10 }
     ]).toArray();
@@ -155,16 +181,30 @@ router.get('/top-products', async (req, res) => {
 // ==========================================================
 
 /**
- * 1️⃣ Top 10 Products by Total Revenue
+ * 1️⃣ Top 10 Products by Total Revenue (detailed)
  */
 router.get('/top-products-revenue', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      { $set: { LINE_TOTAL: { $toDouble: { $ifNull: ["$Total_Line_Price", 0] } } } },
-      { $group: { _id: "$Inventory_code", totalRevenue: { $sum: "$LINE_TOTAL" }, totalQty: { $sum: "$Quantity" } } },
+      {
+        $addFields: {
+          lineTotal: {
+            $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", "$LINE_TOTAL", 0] }
+          },
+          qty: { $toDouble: { $ifNull: ["$QUANTITY", "$QTY", 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$INVENTORY_CODE",
+          totalRevenue: { $sum: "$lineTotal" },
+          totalQty: { $sum: "$qty" }
+        }
+      },
       { $sort: { totalRevenue: -1 } },
       { $limit: 10 }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
+
     res.json({ success: true, data: results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -177,13 +217,33 @@ router.get('/top-products-revenue', async (req, res) => {
 router.get('/top-customers', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $lookup: { from: "Sales_Line", localField: "Doc_number", foreignField: "Doc_Number", as: "lines" } },
-      { $unwind: "$lines" },
-      { $set: { lineTotal: { $toDouble: { $ifNull: ["$lines.Total_Line_Price", 0] } } } },
-      { $group: { _id: "$Customer_number", totalSpent: { $sum: "$lineTotal" }, transactionCount: { $sum: 1 } } },
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "lines"
+        }
+      },
+      { $unwind: { path: "$lines", preserveNullAndEmptyArrays: false } },
+      {
+        $addFields: {
+          lineTotal: {
+            $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", "$lines.LINE_TOTAL", 0] }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: "$CUSTOMER_NUMBER",
+          totalSpent: { $sum: "$lineTotal" },
+          transactionCount: { $sum: 1 }
+        }
+      },
       { $sort: { totalSpent: -1 } },
       { $limit: 10 }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
+
     res.json({ success: true, data: results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -191,18 +251,34 @@ router.get('/top-customers', async (req, res) => {
 });
 
 /**
- * 3️⃣ Revenue per Month
+ * 3️⃣ Revenue per Month (FIN_PERIOD)
  */
 router.get('/revenue-per-month', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $set: { FIN_period: { $toString: "$FIN_period" } } },
-      { $lookup: { from: "Sales_Line", localField: "Doc_number", foreignField: "Doc_Number", as: "lines" } },
-      { $unwind: "$lines" },
-      { $set: { lineTotal: { $toDouble: { $ifNull: ["$lines.Total_Line_Price", 0] } } } },
-      { $group: { _id: "$FIN_period", totalRevenue: { $sum: "$lineTotal" } } },
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "lines"
+        }
+      },
+      { $unwind: { path: "$lines", preserveNullAndEmptyArrays: false } },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", "$lines.LINE_TOTAL", 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$FIN_PERIOD",
+          totalRevenue: { $sum: "$lineTotal" }
+        }
+      },
       { $sort: { _id: 1 } }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
+
     res.json({ success: true, data: results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -215,12 +291,29 @@ router.get('/revenue-per-month', async (req, res) => {
 router.get('/qty-per-month', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $lookup: { from: "Sales_Line", localField: "Doc_number", foreignField: "Doc_Number", as: "lines" } },
-      { $unwind: "$lines" },
-      { $set: { qty: { $toInt: { $ifNull: ["$lines.Quantity", 1] } }, FIN_period: 1 } },
-      { $group: { _id: "$FIN_period", totalQty: { $sum: "$qty" } } },
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "lines"
+        }
+      },
+      { $unwind: { path: "$lines", preserveNullAndEmptyArrays: false } },
+      {
+        $addFields: {
+          qty: { $toDouble: { $ifNull: ["$lines.QUANTITY", "$lines.QTY", 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$FIN_PERIOD",
+          totalQty: { $sum: "$qty" }
+        }
+      },
       { $sort: { _id: 1 } }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
+
     res.json({ success: true, data: results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -233,11 +326,30 @@ router.get('/qty-per-month', async (req, res) => {
 router.get('/profit-margin', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      { $set: { lineTotal: { $toDouble: { $ifNull: ["$Total_Line_Price", 0] } }, cost: { $toDouble: { $ifNull: ["$Last_cost", 0] } } } },
-      { $group: { _id: "$Inventory_code", totalRevenue: { $sum: "$lineTotal" }, totalCost: { $sum: "$cost" } } },
-      { $set: { profitMargin: { $subtract: ["$totalRevenue", "$totalCost"] } } },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", "$LINE_TOTAL", 0] } },
+          cost: { $toDouble: { $ifNull: ["$LAST_COST", 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$INVENTORY_CODE",
+          totalRevenue: { $sum: "$lineTotal" },
+          totalCost: { $sum: "$cost" }
+        }
+      },
+      {
+        $addFields: {
+          profitMargin: { $subtract: ["$totalRevenue", "$totalCost"] },
+          profitPct: {
+            $cond: [{ $eq: ["$totalRevenue", 0] }, 0, { $multiply: [{ $divide: [{ $subtract: ["$totalRevenue", "$totalCost"] }, "$totalRevenue"] }, 100] }]
+          }
+        }
+      },
       { $sort: { profitMargin: -1 } }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
+
     res.json({ success: true, data: results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -250,13 +362,30 @@ router.get('/profit-margin', async (req, res) => {
 router.get('/top-regions', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $lookup: { from: "Sales_Line", localField: "Doc_number", foreignField: "Doc_Number", as: "lines" } },
-      { $unwind: "$lines" },
-      { $set: { lineTotal: { $toDouble: { $ifNull: ["$lines.Total_Line_Price", 0] } } } },
-      { $group: { _id: "$Region_code", totalRevenue: { $sum: "$lineTotal" } } },
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "lines"
+        }
+      },
+      { $unwind: { path: "$lines", preserveNullAndEmptyArrays: false } },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", "$lines.LINE_TOTAL", 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$Region_code",
+          totalRevenue: { $sum: "$lineTotal" }
+        }
+      },
       { $sort: { totalRevenue: -1 } },
       { $limit: 5 }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
+
     res.json({ success: true, data: results });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

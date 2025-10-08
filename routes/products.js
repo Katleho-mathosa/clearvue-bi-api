@@ -8,7 +8,7 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
     success: true,
     data,
     meta: {
-      total: data.length,
+      total: Array.isArray(data) ? data.length : (data ? 1 : 0),
       page: parseInt(page),
       limit: parseInt(limit)
     }
@@ -31,15 +31,26 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET top 10 products by stock or sales (aggregated)
+// GET top 10 products by sales
 router.get('/top', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      { $set: { Total_Line_Price: { $toDouble: { $ifNull: ["$Total_Line_Price", 0] } } } },
-      { $group: { _id: "$Inventory_code", totalSales: { $sum: "$Total_Line_Price" }, totalQty: { $sum: "$Quantity" } } },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", "$LINE_TOTAL", 0] } },
+          qty: { $toDouble: { $ifNull: ["$QUANTITY", "$QTY", 0] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$INVENTORY_CODE",
+          totalSales: { $sum: "$lineTotal" },
+          totalQty: { $sum: "$qty" }
+        }
+      },
       { $sort: { totalSales: -1 } },
       { $limit: 10 }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
     sendResponse(res, results);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
@@ -66,16 +77,34 @@ router.get('/brands', async (req, res) => {
   }
 });
 
-// GET top categories by revenue
+// GET top categories by revenue (join Products -> Sales_Line)
 router.get('/top-categories', async (req, res) => {
   try {
     const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      { $lookup: { from: "Products", localField: "Inventory_code", foreignField: "Inventory_code", as: "product" } },
-      { $unwind: "$product" },
-      { $group: { _id: "$product.ProCAT_code", totalRevenue: { $sum: "$Total_Line_Price" } } },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", "$LINE_TOTAL", 0] } }
+        }
+      },
+      {
+        $lookup: {
+          from: "Products",
+          localField: "INVENTORY_CODE",
+          foreignField: "INVENTORY_CODE",
+          as: "product"
+        }
+      },
+      { $unwind: { path: "$product", preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: "$product.PRODCAT_CODE",
+          totalRevenue: { $sum: "$lineTotal" },
+          productCount: { $sum: 1 }
+        }
+      },
       { $sort: { totalRevenue: -1 } },
       { $limit: 10 }
-    ]).toArray();
+    ], { allowDiskUse: true }).toArray();
     sendResponse(res, results);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
