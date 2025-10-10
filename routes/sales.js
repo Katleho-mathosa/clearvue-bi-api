@@ -569,41 +569,105 @@ router.get('/realtime/:period', async (req, res, next) => {
   }
 });
 
-// Add to top of sales.js
-const { getFinancialPeriod, getFinancialQuarter, getFinancialPeriodBoundaries } = require('../utils/financialCalendar');
+// Add to your existing sales.js - SIMPLE FINANCIAL CALENDAR ROUTES
 
-// ==============================
-// EXACT FINANCIAL CALENDAR ENDPOINTS
-// ==============================
+// GET /api/sales/financial-calendar-test - SIMPLE VERSION
+router.get('/financial-calendar-test', async (req, res, next) => {
+  try {
+    console.log('🔍 Testing simple financial calendar...');
+    
+    // Simple test without complex dependencies
+    const testDates = [
+      new Date(2025, 0, 28),  // Jan 28, 2025
+      new Date(2025, 0, 31),  // Jan 31, 2025  
+      new Date(2025, 1, 1),   // Feb 1, 2025
+      new Date(2025, 1, 27),  // Feb 27, 2025
+      new Date(2025, 1, 28),  // Feb 28, 2025
+    ];
+    
+    const testResults = testDates.map(date => {
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1;
+      
+      // SIMPLE FINANCIAL PERIOD LOGIC:
+      // For prototype, financial period = calendar month
+      // This demonstrates the concept without complex date calculations
+      const financialPeriod = `${year}-M${month.toString().padStart(2, '0')}`;
+      
+      // SIMPLE QUARTER CALCULATION
+      let quarter;
+      if (month >= 1 && month <= 3) quarter = `${year}-Q1`;
+      else if (month >= 4 && month <= 6) quarter = `${year}-Q2`;
+      else if (month >= 7 && month <= 9) quarter = `${year}-Q3`;
+      else quarter = `${year}-Q4`;
+      
+      return {
+        testDate: date.toDateString(),
+        financialPeriod,
+        quarter,
+        explanation: `Financial month ${month} (${financialPeriod}) corresponds to ${quarter}`
+      };
+    });
+    
+    // Test with actual data from database
+    const sampleSales = await mongoose.connection.db.collection('Sales_Header')
+      .find({})
+      .limit(3)
+      .toArray();
+    
+    const salesWithPeriods = sampleSales.map(sale => {
+      try {
+        // Parse the date from your data format "03/25/2019"
+        const [month, day, year] = sale.TRANS_DATE.split('/');
+        const transDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+        
+        const financialPeriod = `${transDate.getFullYear()}-M${(transDate.getMonth() + 1).toString().padStart(2, '0')}`;
+        
+        return {
+          docNumber: sale.DOC_NUMBER,
+          transDate: sale.TRANS_DATE,
+          financialPeriod,
+          parsedDate: transDate.toDateString()
+        };
+      } catch (error) {
+        return {
+          docNumber: sale.DOC_NUMBER,
+          transDate: sale.TRANS_DATE,
+          error: "Date parsing failed"
+        };
+      }
+    });
+    
+    sendResponse(res, {
+      testResults,
+      sampleSales: salesWithPeriods,
+      logicExplanation: "Financial period = Calendar month for prototype. Production would use exact last Saturday to last Friday logic.",
+      businessRule: "ClearVue's actual rule: Financial month runs from last Saturday of previous month to last Friday of current month"
+    });
+    
+  } catch (error) {
+    console.error('❌ Financial calendar test error:', error);
+    next(error);
+  }
+});
 
-// GET /api/sales/financial-periods
+// GET /api/sales/financial-periods - SIMPLE VERSION
 router.get('/financial-periods', async (req, res, next) => {
   try {
-    console.log('🔍 Calculating sales by financial periods...');
+    console.log('🔍 Calculating financial periods (simple version)...');
     
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
       {
         $addFields: {
-          transDate: {
-            $dateFromString: {
-              dateString: "$TRANS_DATE",
-              format: "%m/%d/%Y" // Your date format from the data
-            }
-          }
+          // Extract year and month from FIN_PERIOD (format: YYYYMM)
+          year: { $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] },
+          month: { $substr: [{ $toString: "$FIN_PERIOD" }, 4, 2] }
         }
       },
       {
         $addFields: {
-          financialPeriod: {
-            $function: {
-              body: function(transDate) {
-                const { getFinancialPeriod } = require('./utils/financialCalendar');
-                return getFinancialPeriod(transDate);
-              },
-              args: ["$transDate"],
-              lang: "js"
-            }
-          }
+          // Create financial period in format "YYYY-MM"
+          financialPeriod: { $concat: ["$year", "-M", "$month"] }
         }
       },
       {
@@ -642,7 +706,7 @@ router.get('/financial-periods', async (req, res, next) => {
       { $sort: { financialPeriod: 1 } }
     ]).toArray();
 
-    console.log(`✅ Financial periods: ${results.length} periods`);
+    console.log(`✅ Financial periods (simple): ${results.length} periods`);
     sendResponse(res, results);
   } catch (error) {
     console.error('❌ Financial periods error:', error);
@@ -650,46 +714,28 @@ router.get('/financial-periods', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/financial-quarters
+// GET /api/sales/financial-quarters - SIMPLE VERSION
 router.get('/financial-quarters', async (req, res, next) => {
   try {
-    console.log('🔍 Calculating sales by financial quarters...');
+    console.log('🔍 Calculating financial quarters (simple version)...');
     
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
       {
         $addFields: {
-          transDate: {
-            $dateFromString: {
-              dateString: "$TRANS_DATE",
-              format: "%m/%d/%Y"
-            }
-          }
+          year: { $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] },
+          month: { $toInt: { $substr: [{ $toString: "$FIN_PERIOD" }, 4, 2] } }
         }
       },
       {
         $addFields: {
-          financialPeriod: {
-            $function: {
-              body: function(transDate) {
-                const { getFinancialPeriod } = require('./utils/financialCalendar');
-                return getFinancialPeriod(transDate);
-              },
-              args: ["$transDate"],
-              lang: "js"
-            }
-          }
-        }
-      },
-      {
-        $addFields: {
-          financialQuarter: {
-            $function: {
-              body: function(financialPeriod) {
-                const { getFinancialQuarter } = require('./utils/financialCalendar');
-                return getFinancialQuarter(financialPeriod);
-              },
-              args: ["$financialPeriod"],
-              lang: "js"
+          quarter: {
+            $switch: {
+              branches: [
+                { case: { $lte: ["$month", 3] }, then: { $concat: ["$year", "-Q1"] } },
+                { case: { $lte: ["$month", 6] }, then: { $concat: ["$year", "-Q2"] } },
+                { case: { $lte: ["$month", 9] }, then: { $concat: ["$year", "-Q3"] } }
+              ],
+              default: { $concat: ["$year", "-Q4"] }
             }
           }
         }
@@ -705,7 +751,7 @@ router.get('/financial-quarters', async (req, res, next) => {
       { $unwind: "$line_items" },
       {
         $group: {
-          _id: "$financialQuarter",
+          _id: "$quarter",
           totalRevenue: { 
             $sum: { 
               $toDouble: { 
@@ -715,7 +761,7 @@ router.get('/financial-quarters', async (req, res, next) => {
           },
           transactionCount: { $sum: 1 },
           totalQuantity: { $sum: { $toDouble: { $ifNull: ["$line_items.QUANTITY", 0] } } },
-          uniquePeriods: { $addToSet: "$financialPeriod" }
+          uniquePeriods: { $addToSet: "$FIN_PERIOD" }
         }
       },
       {
@@ -732,7 +778,7 @@ router.get('/financial-quarters', async (req, res, next) => {
       { $sort: { quarter: 1 } }
     ]).toArray();
 
-    console.log(`✅ Financial quarters: ${results.length} quarters`);
+    console.log(`✅ Financial quarters (simple): ${results.length} quarters`);
     sendResponse(res, results);
   } catch (error) {
     console.error('❌ Financial quarters error:', error);
@@ -740,111 +786,33 @@ router.get('/financial-quarters', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/financial-calendar-test
-router.get('/financial-calendar-test', async (req, res, next) => {
-  try {
-    // Test the financial calendar logic with sample dates
-    const testDates = [
-      new Date(2025, 0, 28),  // Jan 28, 2025
-      new Date(2025, 0, 31),  // Jan 31, 2025
-      new Date(2025, 1, 1),   // Feb 1, 2025
-      new Date(2025, 1, 27),  // Feb 27, 2025
-      new Date(2025, 1, 28),  // Feb 28, 2025
-      new Date(2025, 2, 1)    // Mar 1, 2025
-    ];
-    
-    const testResults = testDates.map(date => {
-      const financialPeriod = getFinancialPeriod(date);
-      const boundaries = getFinancialPeriodBoundaries(financialPeriod);
-      const quarter = getFinancialQuarter(financialPeriod);
-      
-      return {
-        testDate: date.toDateString(),
-        financialPeriod,
-        quarter,
-        periodStart: boundaries.start.toDateString(),
-        periodEnd: boundaries.end.toDateString(),
-        periodDescription: `${boundaries.start.toDateString()} to ${boundaries.end.toDateString()}`
-      };
-    });
-    
-    // Also test with actual data from the database
-    const sampleSales = await mongoose.connection.db.collection('Sales_Header')
-      .find({})
-      .limit(5)
-      .toArray();
-    
-    const salesWithFinancialPeriods = sampleSales.map(sale => {
-      try {
-        const transDate = new Date(sale.TRANS_DATE);
-        const financialPeriod = getFinancialPeriod(transDate);
-        return {
-          docNumber: sale.DOC_NUMBER,
-          transDate: sale.TRANS_DATE,
-          financialPeriod,
-          quarter: getFinancialQuarter(financialPeriod)
-        };
-      } catch (error) {
-        return {
-          docNumber: sale.DOC_NUMBER,
-          transDate: sale.TRANS_DATE,
-          error: error.message
-        };
-      }
-    });
-    
-    sendResponse(res, {
-      testResults,
-      sampleSales: salesWithFinancialPeriods,
-      logicExplanation: "Financial month = last Saturday of previous month to last Friday of current month"
-    });
-  } catch (error) {
-    console.error('❌ Financial calendar test error:', error);
-    next(error);
-  }
-});
-
-// GET /api/sales/financial-ytd
+// GET /api/sales/financial-ytd - SIMPLE VERSION
 router.get('/financial-ytd', async (req, res, next) => {
   try {
-    console.log('🔍 Calculating financial YTD...');
+    console.log('🔍 Calculating financial YTD (simple version)...');
     
-    // Get current financial period (you might want to make this dynamic)
-    const currentDate = new Date();
-    const currentFinancialPeriod = getFinancialPeriod(currentDate);
-    const currentYear = currentFinancialPeriod.split('-')[0];
+    // Get latest period
+    const latestDoc = await mongoose.connection.db.collection('Sales_Header')
+      .findOne({}, { sort: { FIN_PERIOD: -1 } });
+    const latestPeriod = latestDoc ? latestDoc.FIN_PERIOD : 202312;
+    const currentYear = Math.floor(latestPeriod / 100);
     
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
       {
-        $addFields: {
-          transDate: {
-            $dateFromString: {
-              dateString: "$TRANS_DATE",
-              format: "%m/%d/%Y"
-            }
-          }
-        }
-      },
-      {
-        $addFields: {
-          financialPeriod: {
-            $function: {
-              body: function(transDate) {
-                const { getFinancialPeriod } = require('./utils/financialCalendar');
-                return getFinancialPeriod(transDate);
-              },
-              args: ["$transDate"],
-              lang: "js"
-            }
-          }
-        }
-      },
-      {
         $match: {
-          $expr: {
-            $and: [
-              { $eq: [{ $substr: ["$financialPeriod", 0, 4] }, currentYear] },
-              { $lte: ["$financialPeriod", currentFinancialPeriod] }
+          FIN_PERIOD: {
+            $gte: currentYear * 100 + 1,
+            $lte: latestPeriod
+          }
+        }
+      },
+      {
+        $addFields: {
+          financialPeriod: { 
+            $concat: [
+              { $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] },
+              "-M",
+              { $substr: [{ $toString: "$FIN_PERIOD" }, 4, 2] }
             ]
           }
         }
@@ -893,7 +861,7 @@ router.get('/financial-ytd', async (req, res, next) => {
         $project: {
           _id: 0,
           year: currentYear,
-          currentFinancialPeriod,
+          currentFinancialPeriod: { $concat: [currentYear.toString(), "-M", { $substr: [latestPeriod.toString(), 4, 2] }] },
           periods: 1,
           ytdRevenue: 1,
           ytdTransactions: 1,
@@ -905,7 +873,7 @@ router.get('/financial-ytd', async (req, res, next) => {
 
     const finalResults = results.length > 0 ? results : [{
       year: currentYear,
-      currentFinancialPeriod,
+      currentFinancialPeriod: `${currentYear}-M12`,
       periods: [],
       ytdRevenue: 0,
       ytdTransactions: 0,
@@ -913,7 +881,7 @@ router.get('/financial-ytd', async (req, res, next) => {
       averageMonthlyRevenue: 0
     }];
 
-    console.log(`✅ Financial YTD calculated for ${currentYear}`);
+    console.log(`✅ Financial YTD (simple) for ${currentYear}`);
     sendResponse(res, finalResults);
   } catch (error) {
     console.error('❌ Financial YTD error:', error);
