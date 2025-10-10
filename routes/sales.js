@@ -569,4 +569,356 @@ router.get('/realtime/:period', async (req, res, next) => {
   }
 });
 
+// Add to top of sales.js
+const { getFinancialPeriod, getFinancialQuarter, getFinancialPeriodBoundaries } = require('../utils/financialCalendar');
+
+// ==============================
+// EXACT FINANCIAL CALENDAR ENDPOINTS
+// ==============================
+
+// GET /api/sales/financial-periods
+router.get('/financial-periods', async (req, res, next) => {
+  try {
+    console.log('🔍 Calculating sales by financial periods...');
+    
+    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
+      {
+        $addFields: {
+          transDate: {
+            $dateFromString: {
+              dateString: "$TRANS_DATE",
+              format: "%m/%d/%Y" // Your date format from the data
+            }
+          }
+        }
+      },
+      {
+        $addFields: {
+          financialPeriod: {
+            $function: {
+              body: function(transDate) {
+                const { getFinancialPeriod } = require('./utils/financialCalendar');
+                return getFinancialPeriod(transDate);
+              },
+              args: ["$transDate"],
+              lang: "js"
+            }
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "line_items"
+        }
+      },
+      { $unwind: "$line_items" },
+      {
+        $group: {
+          _id: "$financialPeriod",
+          totalRevenue: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
+              } 
+            } 
+          },
+          transactionCount: { $sum: 1 },
+          totalQuantity: { $sum: { $toDouble: { $ifNull: ["$line_items.QUANTITY", 0] } } }
+        }
+      },
+      {
+        $project: {
+          financialPeriod: "$_id",
+          totalRevenue: 1,
+          transactionCount: 1,
+          totalQuantity: 1,
+          averageTransaction: { $divide: ["$totalRevenue", "$transactionCount"] },
+          _id: 0
+        }
+      },
+      { $sort: { financialPeriod: 1 } }
+    ]).toArray();
+
+    console.log(`✅ Financial periods: ${results.length} periods`);
+    sendResponse(res, results);
+  } catch (error) {
+    console.error('❌ Financial periods error:', error);
+    next(error);
+  }
+});
+
+// GET /api/sales/financial-quarters
+router.get('/financial-quarters', async (req, res, next) => {
+  try {
+    console.log('🔍 Calculating sales by financial quarters...');
+    
+    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
+      {
+        $addFields: {
+          transDate: {
+            $dateFromString: {
+              dateString: "$TRANS_DATE",
+              format: "%m/%d/%Y"
+            }
+          }
+        }
+      },
+      {
+        $addFields: {
+          financialPeriod: {
+            $function: {
+              body: function(transDate) {
+                const { getFinancialPeriod } = require('./utils/financialCalendar');
+                return getFinancialPeriod(transDate);
+              },
+              args: ["$transDate"],
+              lang: "js"
+            }
+          }
+        }
+      },
+      {
+        $addFields: {
+          financialQuarter: {
+            $function: {
+              body: function(financialPeriod) {
+                const { getFinancialQuarter } = require('./utils/financialCalendar');
+                return getFinancialQuarter(financialPeriod);
+              },
+              args: ["$financialPeriod"],
+              lang: "js"
+            }
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "line_items"
+        }
+      },
+      { $unwind: "$line_items" },
+      {
+        $group: {
+          _id: "$financialQuarter",
+          totalRevenue: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
+              } 
+            } 
+          },
+          transactionCount: { $sum: 1 },
+          totalQuantity: { $sum: { $toDouble: { $ifNull: ["$line_items.QUANTITY", 0] } } },
+          uniquePeriods: { $addToSet: "$financialPeriod" }
+        }
+      },
+      {
+        $project: {
+          quarter: "$_id",
+          totalRevenue: 1,
+          transactionCount: 1,
+          totalQuantity: 1,
+          periodCount: { $size: "$uniquePeriods" },
+          averageTransaction: { $divide: ["$totalRevenue", "$transactionCount"] },
+          _id: 0
+        }
+      },
+      { $sort: { quarter: 1 } }
+    ]).toArray();
+
+    console.log(`✅ Financial quarters: ${results.length} quarters`);
+    sendResponse(res, results);
+  } catch (error) {
+    console.error('❌ Financial quarters error:', error);
+    next(error);
+  }
+});
+
+// GET /api/sales/financial-calendar-test
+router.get('/financial-calendar-test', async (req, res, next) => {
+  try {
+    // Test the financial calendar logic with sample dates
+    const testDates = [
+      new Date(2025, 0, 28),  // Jan 28, 2025
+      new Date(2025, 0, 31),  // Jan 31, 2025
+      new Date(2025, 1, 1),   // Feb 1, 2025
+      new Date(2025, 1, 27),  // Feb 27, 2025
+      new Date(2025, 1, 28),  // Feb 28, 2025
+      new Date(2025, 2, 1)    // Mar 1, 2025
+    ];
+    
+    const testResults = testDates.map(date => {
+      const financialPeriod = getFinancialPeriod(date);
+      const boundaries = getFinancialPeriodBoundaries(financialPeriod);
+      const quarter = getFinancialQuarter(financialPeriod);
+      
+      return {
+        testDate: date.toDateString(),
+        financialPeriod,
+        quarter,
+        periodStart: boundaries.start.toDateString(),
+        periodEnd: boundaries.end.toDateString(),
+        periodDescription: `${boundaries.start.toDateString()} to ${boundaries.end.toDateString()}`
+      };
+    });
+    
+    // Also test with actual data from the database
+    const sampleSales = await mongoose.connection.db.collection('Sales_Header')
+      .find({})
+      .limit(5)
+      .toArray();
+    
+    const salesWithFinancialPeriods = sampleSales.map(sale => {
+      try {
+        const transDate = new Date(sale.TRANS_DATE);
+        const financialPeriod = getFinancialPeriod(transDate);
+        return {
+          docNumber: sale.DOC_NUMBER,
+          transDate: sale.TRANS_DATE,
+          financialPeriod,
+          quarter: getFinancialQuarter(financialPeriod)
+        };
+      } catch (error) {
+        return {
+          docNumber: sale.DOC_NUMBER,
+          transDate: sale.TRANS_DATE,
+          error: error.message
+        };
+      }
+    });
+    
+    sendResponse(res, {
+      testResults,
+      sampleSales: salesWithFinancialPeriods,
+      logicExplanation: "Financial month = last Saturday of previous month to last Friday of current month"
+    });
+  } catch (error) {
+    console.error('❌ Financial calendar test error:', error);
+    next(error);
+  }
+});
+
+// GET /api/sales/financial-ytd
+router.get('/financial-ytd', async (req, res, next) => {
+  try {
+    console.log('🔍 Calculating financial YTD...');
+    
+    // Get current financial period (you might want to make this dynamic)
+    const currentDate = new Date();
+    const currentFinancialPeriod = getFinancialPeriod(currentDate);
+    const currentYear = currentFinancialPeriod.split('-')[0];
+    
+    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
+      {
+        $addFields: {
+          transDate: {
+            $dateFromString: {
+              dateString: "$TRANS_DATE",
+              format: "%m/%d/%Y"
+            }
+          }
+        }
+      },
+      {
+        $addFields: {
+          financialPeriod: {
+            $function: {
+              body: function(transDate) {
+                const { getFinancialPeriod } = require('./utils/financialCalendar');
+                return getFinancialPeriod(transDate);
+              },
+              args: ["$transDate"],
+              lang: "js"
+            }
+          }
+        }
+      },
+      {
+        $match: {
+          $expr: {
+            $and: [
+              { $eq: [{ $substr: ["$financialPeriod", 0, 4] }, currentYear] },
+              { $lte: ["$financialPeriod", currentFinancialPeriod] }
+            ]
+          }
+        }
+      },
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "line_items"
+        }
+      },
+      { $unwind: "$line_items" },
+      {
+        $group: {
+          _id: "$financialPeriod",
+          periodRevenue: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
+              } 
+            } 
+          },
+          periodTransactions: { $sum: 1 },
+          periodQuantity: { $sum: { $toDouble: { $ifNull: ["$line_items.QUANTITY", 0] } } }
+        }
+      },
+      { $sort: { _id: 1 } },
+      {
+        $group: {
+          _id: null,
+          periods: {
+            $push: {
+              period: "$_id",
+              revenue: "$periodRevenue",
+              transactions: "$periodTransactions",
+              quantity: "$periodQuantity"
+            }
+          },
+          ytdRevenue: { $sum: "$periodRevenue" },
+          ytdTransactions: { $sum: "$periodTransactions" },
+          ytdQuantity: { $sum: "$periodQuantity" }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          year: currentYear,
+          currentFinancialPeriod,
+          periods: 1,
+          ytdRevenue: 1,
+          ytdTransactions: 1,
+          ytdQuantity: 1,
+          averageMonthlyRevenue: { $divide: ["$ytdRevenue", { $size: "$periods" }] }
+        }
+      }
+    ]).toArray();
+
+    const finalResults = results.length > 0 ? results : [{
+      year: currentYear,
+      currentFinancialPeriod,
+      periods: [],
+      ytdRevenue: 0,
+      ytdTransactions: 0,
+      ytdQuantity: 0,
+      averageMonthlyRevenue: 0
+    }];
+
+    console.log(`✅ Financial YTD calculated for ${currentYear}`);
+    sendResponse(res, finalResults);
+  } catch (error) {
+    console.error('❌ Financial YTD error:', error);
+    next(error);
+  }
+});
+
 module.exports = router;
