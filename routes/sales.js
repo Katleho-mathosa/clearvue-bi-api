@@ -70,37 +70,31 @@ router.get('/regions', async (req, res, next) => {
 // REALTIME SALES
 // ==============================
 
-// GET /api/sales/realtime/:period?region=REGION_CODE
-router.get('/realtime/:period', async (req, res, next) => {
+// GET /api/sales/periods?start=YYYYMM&end=YYYYMM&sort=-1&limit=12&page=1
+router.get('/periods', async (req, res, next) => {
   try {
-    const { period } = req.params;
-    const { region } = req.query;
+    const { start, end, sort = -1, limit = 12, page = 1 } = req.query;
+    const match = {};
 
-    const match = { calculated_FIN_PERIOD: parseInt(period) };
-    if (region) match.region = region; // optional region filtering
+    // use correct field name
+    if (start) match.financialPeriod = { $gte: parseInt(start) };
+    if (end) match.financialPeriod = { ...(match.financialPeriod || {}), $lte: parseInt(end) };
 
-    const sales = await mongoose.connection.db
-      .collection('Sales_Header')
-      .aggregate([
-        { $match: match },
-        {
-          $group: {
-            _id: '$region',
-            totalSales: { $sum: '$Total_Sales' },
-            totalProfit: { $sum: '$Total_Profit' },
-            avgMargin: { $avg: '$Profit_Margin' },
-          },
-        },
-        { $sort: { totalSales: -1 } },
-      ])
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const results = await mongoose.connection.db
+      .collection('sales_summary_period')
+      .find(match)
+      .sort({ financialPeriod: parseInt(sort) })
+      .skip(skip)
+      .limit(parseInt(limit))
       .toArray();
 
-    sendResponse(res, sales);
+    sendResponse(res, results, page, limit);
   } catch (error) {
     next(error);
   }
 });
-
 
 // GET /api/sales/realtime (simulated realtime transactions)
 router.get('/realtime', async (req, res) => {
