@@ -110,7 +110,25 @@ app.get('/api/sales-summary/:period', async (req, res) => {
   }
 });
 
-
+// Add this diagnostic route to app.js - TEMPORARY
+app.get('/api/debug/collections', async (req, res) => {
+  try {
+    const collections = await mongoose.connection.db.listCollections().toArray();
+    const collectionNames = collections.map(c => c.name);
+    
+    res.json({
+      success: true,
+      existing_collections: collectionNames,
+      missing_expected: [
+        'sales_summary_period', 
+        'sales_summary_region',
+        'RealTime_Transactions'
+      ].filter(name => !collectionNames.includes(name))
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Start server
 app.listen(PORT, () => {

@@ -1,3 +1,5 @@
+// routes/sales.js - UPDATED VERSION
+
 const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
@@ -16,307 +18,259 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
 };
 
 // ==============================
-// SALES PERIODS & SUMMARY
+// FIXED SALES ENDPOINTS
 // ==============================
 
-// GET /api/sales/periods?start=YYYYMM&end=YYYYMM&sort=-1&limit=12&page=1
-router.get('/periods', async (req, res, next) => {
-  try {
-    const { start, end, sort = -1, limit = 12, page = 1, region } = req.query;
-
-    const match = {};
-    if (start) match.calculated_FIN_PERIOD = { $gte: parseInt(start) };
-    if (end) match.calculated_FIN_PERIOD = { ...(match.calculated_FIN_PERIOD || {}), $lte: parseInt(end) };
-    if (region) match.region = region; // optional region filtering
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const results = await mongoose.connection.db
-      .collection('sales_summary_period')
-      .find(match)
-      .sort({ calculated_FIN_PERIOD: parseInt(sort) })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .toArray();
-
-    sendResponse(res, results, page, limit);
-  } catch (error) {
-    next(error);
-  }
-});
-
-
-// GET /api/sales/regions?sort=-1&limit=10&page=1
-router.get('/regions', async (req, res, next) => {
-  try {
-    const { sort = -1, limit = 10, page = 1 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const results = await mongoose.connection.db
-      .collection('sales_summary_region')
-      .find({})
-      .sort({ totalRevenue: parseInt(sort) })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .toArray();
-
-    sendResponse(res, results, page, limit);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ==============================
-// REALTIME SALES
-// ==============================
-
-// GET /api/sales/periods?start=YYYYMM&end=YYYYMM&sort=-1&limit=12&page=1
+// GET /api/sales/periods - FIXED
 router.get('/periods', async (req, res, next) => {
   try {
     const { start, end, sort = -1, limit = 12, page = 1 } = req.query;
-    const match = {};
-
-    // use correct field name
-    if (start) match.financialPeriod = { $gte: parseInt(start) };
-    if (end) match.financialPeriod = { ...(match.financialPeriod || {}), $lte: parseInt(end) };
-
-    const skip = (parseInt(page) - 1) * parseInt(limit);
-
-    const results = await mongoose.connection.db
-      .collection('sales_summary_period')
-      .find(match)
-      .sort({ financialPeriod: parseInt(sort) })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .toArray();
-
-    sendResponse(res, results, page, limit);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/sales/realtime (simulated realtime transactions)
-router.get('/realtime', async (req, res) => {
-  try {
-    const { since } = req.query;
-    const query = since ? { Deposit_date: { $gte: new Date(since) } } : {};
-    const results = await mongoose.connection.db
-      .collection('RealTime_Transactions')
-      .find(query)
-      .sort({ Deposit_date: -1 })
-      .toArray();
-
-    res.json({ success: true, data: results });
-  } catch (error) {
-    console.error('❌ Realtime API error:', error);
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==============================
-// DASHBOARD & ANALYTICS
-// ==============================
-
-// Revenue per Month
-router.get('/revenue-per-month', async (req, res) => {
-  try {
+    
+    // Use AGGREGATION instead of pre-computed collection
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
       {
         $lookup: {
           from: "Sales_Line",
           localField: "DOC_NUMBER",
           foreignField: "DOC_NUMBER",
-          as: "lines"
+          as: "line_items"
         }
       },
-      { $unwind: "$lines" },
-      {
-        $addFields: {
-          lineTotal: { $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", "$lines.LINE_TOTAL", 0] } }
-        }
-      },
+      { $unwind: "$line_items" },
       {
         $group: {
-          _id: "$calculated_FIN_PERIOD",
-          totalRevenue: { $sum: "$lineTotal" }
-        }
-      },
-      { $sort: { _id: 1 } }
-    ], { allowDiskUse: true }).toArray();
-
-    res.json({ success: true, data: results });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Quantity per Month
-router.get('/qty-per-month', async (req, res) => {
-  try {
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $lookup: { from: "Sales_Line", localField: "DOC_NUMBER", foreignField: "DOC_NUMBER", as: "lines" } },
-      { $unwind: "$lines" },
-      { $addFields: { qty: { $toDouble: { $ifNull: ["$lines.QUANTITY", "$lines.QTY", 0] } } } },
-      {
-        $group: {
-          _id: "$calculated_FIN_PERIOD",
-          totalQty: { $sum: "$qty" }
-        }
-      },
-      { $sort: { _id: 1 } }
-    ], { allowDiskUse: true }).toArray();
-
-    res.json({ success: true, data: results });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// ==============================
-// TOP PRODUCTS & CUSTOMERS
-// ==============================
-
-// Top Products by Revenue
-router.get('/top-products-revenue', async (req, res) => {
-  try {
-    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      {
-        $addFields: {
-          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", "$LINE_TOTAL", 0] } },
-          qty: { $toDouble: { $ifNull: ["$QUANTITY", "$QTY", 0] } }
-        }
-      },
-      {
-        $group: {
-          _id: "$INVENTORY_CODE",
-          totalRevenue: { $sum: "$lineTotal" },
-          totalQty: { $sum: "$qty" }
-        }
-      },
-      { $sort: { totalRevenue: -1 } },
-      { $limit: 10 }
-    ], { allowDiskUse: true }).toArray();
-
-    res.json({ success: true, data: results });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Top Customers
-router.get('/top-customers', async (req, res) => {
-  try {
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $lookup: { from: "Sales_Line", localField: "DOC_NUMBER", foreignField: "DOC_NUMBER", as: "lines" } },
-      { $unwind: "$lines" },
-      { $addFields: { lineTotal: { $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", "$lines.LINE_TOTAL", 0] } } } },
-      {
-        $group: {
-          _id: "$CUSTOMER_NUMBER",
-          totalSpent: { $sum: "$lineTotal" },
+          _id: "$FIN_PERIOD", // Use ACTUAL field name from your data
+          totalRevenue: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
+              } 
+            } 
+          },
           transactionCount: { $sum: 1 }
         }
       },
-      { $sort: { totalSpent: -1 } },
-      { $limit: 10 }
+      { 
+        $project: {
+          financialPeriod: "$_id",
+          totalRevenue: 1,
+          transactionCount: 1,
+          _id: 0
+        }
+      },
+      { $sort: { financialPeriod: parseInt(sort) } },
+      { $skip: (parseInt(page) - 1) * parseInt(limit) },
+      { $limit: parseInt(limit) }
     ], { allowDiskUse: true }).toArray();
 
-    res.json({ success: true, data: results });
+    sendResponse(res, results, page, limit);
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    next(error);
   }
 });
 
-// ==============================
-// PROFIT MARGIN & REGIONS
-// ==============================
-
-// Profit Margin per Product
-router.get('/profit-margin', async (req, res) => {
+// GET /api/sales/regions - FIXED
+router.get('/regions', async (req, res, next) => {
   try {
-    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
+    const { sort = -1, limit = 10, page = 1 } = req.query;
+
+    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
       {
-        $addFields: {
-          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", "$LINE_TOTAL", 0] } },
-          cost: { $toDouble: { $ifNull: ["$LAST_COST", 0] } }
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "line_items"
         }
       },
+      {
+        $lookup: {
+          from: "Customer",
+          localField: "CUSTOMER_NUMBER", 
+          foreignField: "CUSTOMER_NUMBER",
+          as: "customer_info"
+        }
+      },
+      { $unwind: "$line_items" },
+      { $unwind: "$customer_info" },
+      {
+        $group: {
+          _id: "$customer_info.REGION_CODE", // Use actual field name
+          totalRevenue: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
+              } 
+            } 
+          },
+          customerCount: { $addToSet: "$CUSTOMER_NUMBER" }
+        }
+      },
+      {
+        $project: {
+          region: "$_id",
+          totalRevenue: 1,
+          customerCount: { $size: "$customerCount" },
+          _id: 0
+        }
+      },
+      { $sort: { totalRevenue: parseInt(sort) } },
+      { $skip: (parseInt(page) - 1) * parseInt(limit) },
+      { $limit: parseInt(limit) }
+    ], { allowDiskUse: true }).toArray();
+
+    sendResponse(res, results, page, limit);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/sales/top-products - FIXED
+router.get('/top-products', async (req, res, next) => {
+  try {
+    const { limit = 10 } = req.query;
+
+    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
       {
         $group: {
           _id: "$INVENTORY_CODE",
-          totalRevenue: { $sum: "$lineTotal" },
-          totalCost: { $sum: "$cost" }
+          totalRevenue: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$TOTAL_LINE_PRICE", 0] 
+              } 
+            } 
+          },
+          totalQuantity: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$QUANTITY", 0] 
+              } 
+            } 
+          },
+          transactionCount: { $sum: 1 }
         }
       },
       {
-        $addFields: {
-          profitMargin: { $subtract: ["$totalRevenue", "$totalCost"] },
-          profitPct: {
-            $cond: [
-              { $eq: ["$totalRevenue", 0] },
-              0,
-              { $multiply: [{ $divide: [{ $subtract: ["$totalRevenue", "$totalCost"] }, "$totalRevenue"] }, 100] }
-            ]
-          }
-        }
-      },
-      { $sort: { profitMargin: -1 } }
-    ], { allowDiskUse: true }).toArray();
-
-    res.json({ success: true, data: results });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// Top 5 Regions by Revenue
-router.get('/top-regions', async (req, res) => {
-  try {
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $lookup: { from: "Sales_Line", localField: "DOC_NUMBER", foreignField: "DOC_NUMBER", as: "lines" } },
-      { $unwind: "$lines" },
-      { $addFields: { lineTotal: { $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", "$lines.LINE_TOTAL", 0] } } } },
-      {
-        $group: {
-          _id: "$Region_code",
-          totalRevenue: { $sum: "$lineTotal" }
+        $project: {
+          productCode: "$_id",
+          totalRevenue: 1,
+          totalQuantity: 1,
+          transactionCount: 1,
+          _id: 0
         }
       },
       { $sort: { totalRevenue: -1 } },
-      { $limit: 5 }
+      { $limit: parseInt(limit) }
     ], { allowDiskUse: true }).toArray();
 
-    res.json({ success: true, data: results });
+    sendResponse(res, results);
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    next(error);
   }
 });
 
-// ==============================
-// REALTIME SIMULATED
-// ==============================
-router.get('/realtime-latest', async (req, res) => {
+// GET /api/sales/overview - NEW
+router.get('/overview', async (req, res, next) => {
+  try {
+    const [periods, regions, topProducts] = await Promise.all([
+      // Periods summary
+      mongoose.connection.db.collection('Sales_Header').aggregate([
+        { $lookup: { from: "Sales_Line", localField: "DOC_NUMBER", foreignField: "DOC_NUMBER", as: "line_items" } },
+        { $unwind: "$line_items" },
+        {
+          $group: {
+            _id: "$FIN_PERIOD",
+            totalRevenue: { $sum: { $toDouble: { $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] } } },
+            transactionCount: { $sum: 1 }
+          }
+        },
+        { $sort: { _id: -1 } },
+        { $limit: 6 }
+      ]).toArray(),
+
+      // Regions summary  
+      mongoose.connection.db.collection('Sales_Header').aggregate([
+        { $lookup: { from: "Sales_Line", localField: "DOC_NUMBER", foreignField: "DOC_NUMBER", as: "line_items" } },
+        { $lookup: { from: "Customer", localField: "CUSTOMER_NUMBER", foreignField: "CUSTOMER_NUMBER", as: "customer_info" } },
+        { $unwind: "$line_items" },
+        { $unwind: "$customer_info" },
+        {
+          $group: {
+            _id: "$customer_info.REGION_CODE",
+            totalRevenue: { $sum: { $toDouble: { $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] } } }
+          }
+        },
+        { $sort: { totalRevenue: -1 } },
+        { $limit: 5 }
+      ]).toArray(),
+
+      // Top products
+      mongoose.connection.db.collection('Sales_Line').aggregate([
+        {
+          $group: {
+            _id: "$INVENTORY_CODE",
+            totalRevenue: { $sum: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", 0] } } }
+          }
+        },
+        { $sort: { totalRevenue: -1 } },
+        { $limit: 5 }
+      ]).toArray()
+    ]);
+
+    sendResponse(res, {
+      periods,
+      regions, 
+      topProducts,
+      summary: {
+        totalPeriods: periods.length,
+        totalRegions: regions.length,
+        totalProducts: topProducts.length
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/sales/realtime - FIXED
+router.get('/realtime', async (req, res, next) => {
   try {
     const results = await mongoose.connection.db.collection('RealTime_Transactions')
       .find({})
-      .sort({ Deposit_date: -1 })
-      .limit(5)
+      .sort({ createdAt: -1 })
+      .limit(20)
       .toArray();
-    res.json({ success: true, data: results });
+    
+    sendResponse(res, results);
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    next(error);
   }
 });
 
-// Aggregated Overview
-router.get('/overview-aggregated', async (req, res) => {
+// GET /api/sales/realtime/:period - NEW
+router.get('/realtime/:period', async (req, res, next) => {
   try {
-    const periods = await mongoose.connection.db.collection('sales_summary_period').find({}).toArray();
-    const regions = await mongoose.connection.db.collection('sales_summary_region').find({}).toArray();
-    res.json({ success: true, data: { periods, regions } });
+    const { period } = req.params;
+    const { limit = 10 } = req.query;
+
+    const results = await mongoose.connection.db.collection('RealTime_Transactions')
+      .find({ 
+        // Simulate filtering by period - adjust based on your real-time data structure
+        $expr: {
+          $eq: [
+            { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
+            period
+          ]
+        }
+      })
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit))
+      .toArray();
+
+    sendResponse(res, results);
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    next(error);
   }
 });
 

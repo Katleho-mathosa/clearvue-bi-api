@@ -2,7 +2,6 @@ const express = require('express');
 const router = express.Router();
 const mongoose = require('mongoose');
 
-// Helper for consistent responses
 const sendResponse = (res, data, page = 1, limit = 0) => {
   res.json({
     success: true,
@@ -15,81 +14,43 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
   });
 };
 
-// GET all customers (with optional pagination) - returns customer regions collection by default
+// GET customers - FIXED
 router.get('/', async (req, res) => {
   try {
     const { limit = 50, page = 1 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
-    const results = await mongoose.connection.db.collection('Customer_Regions')
+    
+    const results = await mongoose.connection.db.collection('Customer') // ACTUAL collection name
       .find({})
       .skip(skip)
       .limit(parseInt(limit))
       .toArray();
+      
     sendResponse(res, results, page, limit);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// GET customer segments (categories)
-router.get('/segments', async (req, res) => {
+// GET customer regions - FIXED
+router.get('/regions', async (req, res) => {
   try {
-    const results = await mongoose.connection.db.collection('Customer_Categories').find({}).toArray();
+    const results = await mongoose.connection.db.collection('Customer_Regions').find({}).toArray();
     sendResponse(res, results);
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// GET top customers by payments (Payment_Lines)
-router.get('/top-payments', async (req, res) => {
+// SIMPLE TEST
+router.get('/test', async (req, res) => {
   try {
-    const results = await mongoose.connection.db.collection('Payment_Lines').aggregate([
-      {
-        $addFields: {
-          totalPayment: { $toDouble: { $ifNull: ["$TOT_PAYMENT", "$Tot_Payment", 0] } }
-        }
-      },
-      {
-        $group: {
-          _id: "$CUSTOMER_NUMBER",
-          totalPaid: { $sum: "$totalPayment" },
-          transactionCount: { $sum: 1 }
-        }
-      },
-      { $sort: { totalPaid: -1 } },
-      { $limit: 10 }
-    ], { allowDiskUse: true }).toArray();
-    sendResponse(res, results);
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
-});
-
-// GET customer age analysis
-router.get('/age-analysis', async (req, res) => {
-  try {
-    const results = await mongoose.connection.db.collection('Age_Analysis').aggregate([
-      {
-        $project: {
-          Customer_number: 1,
-          FIN_Period: 1,
-          Total_Due: 1,
-          Amt_Current: 1,
-          Amt_30_Days: 1,
-          Amt_60_Days: 1,
-          Amt_90_Days: 1,
-          Amt_120_Days: 1,
-          Amt_150_Days: 1,
-          Amt_180_Days: 1,
-          Amt_210_Days: 1,
-          Amt_240_Days: 1,
-          Amt_270_Days: 1,
-          Amt_300_Days: 1
-        }
-      }
-    ]).toArray();
-    sendResponse(res, results);
+    const customerCount = await mongoose.connection.db.collection('Customer').countDocuments();
+    res.json({
+      success: true,
+      message: "Customers API working!",
+      data: { total_customers: customerCount }
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
