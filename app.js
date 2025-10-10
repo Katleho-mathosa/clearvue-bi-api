@@ -97,16 +97,19 @@ app.use((err, req, res, next) => {
 app.get('/api/sales-summary/:period', async (req, res) => {
   try {
     const period = parseInt(req.params.period);
-    const data = await db.collection('sales_summary_period')
+
+    const data = await mongoose.connection.db
+      .collection('sales_summary_period')
       .find({ financialPeriod: period })
       .toArray();
 
     res.json({ success: true, data, meta: { total: data.length } });
   } catch (error) {
-    console.error(error);
+    console.error('❌ Error fetching sales summary:', error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
 
 
 // Start server
