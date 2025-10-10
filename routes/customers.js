@@ -258,4 +258,60 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Add this to your existing customers.js file
+router.get('/payment-trends', async (req, res) => {
+  try {
+    console.log('🔍 Fetching payment trends...');
+    
+    const results = await mongoose.connection.db.collection('Payment_Lines').aggregate([
+      {
+        $match: {
+          TOT_PAYMENT: { $gt: 0 } // Only positive payments
+        }
+      },
+      {
+        $group: {
+          _id: "$FIN_PERIOD",
+          totalPayments: { 
+            $sum: { 
+              $toDouble: { 
+                $ifNull: ["$TOT_PAYMENT", 0] 
+              } 
+            } 
+          },
+          paymentCount: { $sum: 1 },
+          uniqueCustomers: { $addToSet: "$CUSTOMER_NUMBER" }
+        }
+      },
+      {
+        $project: {
+          period: "$_id",
+          totalPayments: 1,
+          paymentCount: 1,
+          uniqueCustomerCount: { $size: "$uniqueCustomers" },
+          avgPayment: { $divide: ["$totalPayments", "$paymentCount"] },
+          _id: 0
+        }
+      },
+      { $sort: { period: 1 } },
+      { $limit: 12 }
+    ], { allowDiskUse: true }).toArray();
+    
+    console.log(`✅ Payment trends: ${results.length} periods`);
+    res.json({
+      success: true,
+      data: results,
+      meta: {
+        total: results.length
+      }
+    });
+  } catch (error) {
+    console.error('❌ Payment trends error:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message 
+    });
+  }
+});
+
 module.exports = router;
