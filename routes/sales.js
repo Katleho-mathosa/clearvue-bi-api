@@ -15,23 +15,19 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
   });
 };
 
-// ==========================================================
-// EXISTING ENDPOINTS (kept & fixed to match provided field names)
-// ==========================================================
-
 // GET /api/sales/periods?start=YYYYMM&end=YYYYMM&sort=-1&limit=12&page=1
 router.get('/periods', async (req, res, next) => {
   try {
     const { start, end, sort = -1, limit = 12, page = 1 } = req.query;
     const match = {};
-    if (start) match.FIN_period = { $gte: parseInt(start) };
-    if (end) match.FIN_period = { ...(match.FIN_period || {}), $lte: parseInt(end) };
+    if (start) match.calculated_FIN_PERIOD = { $gte: parseInt(start) };
+    if (end) match.calculated_FIN_PERIOD = { ...(match.calculated_FIN_PERIOD || {}), $lte: parseInt(end) };
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const results = await mongoose.connection.db
       .collection('sales_summary_period')
       .find(match)
-      .sort({ FIN_period: parseInt(sort) })
+      .sort({ calculated_FIN_PERIOD: parseInt(sort) })
       .skip(skip)
       .limit(parseInt(limit))
       .toArray();
@@ -41,6 +37,7 @@ router.get('/periods', async (req, res, next) => {
     next(error);
   }
 });
+
 
 // GET /api/sales/regions?sort=-1&limit=10&page=1
 router.get('/regions', async (req, res, next) => {
@@ -63,14 +60,16 @@ router.get('/regions', async (req, res, next) => {
 });
 
 // GET /api/sales/realtime/:period?region=REGION_CODE
-// Corrected to use field names you provided
 router.get('/realtime/:period', async (req, res, next) => {
   try {
     const { period } = req.params;
     const { region } = req.query;
 
+    const matchStage = { calculated_FIN_PERIOD: parseInt(period) };
+    if (region) matchStage.Region_code = region;
+
     const pipeline = [
-      { $match: { FIN_PERIOD: parseInt(period) } },
+      { $match: matchStage },
       {
         $lookup: {
           from: "Sales_Line",
@@ -79,38 +78,30 @@ router.get('/realtime/:period', async (req, res, next) => {
           as: "line_items"
         }
       },
-      { $unwind: { path: "$line_items", preserveNullAndEmptyArrays: false } }
-    ];
-
-    // optional region filter on header
-    if (region) {
-      pipeline.unshift({ $match: { FIN_PERIOD: parseInt(period), Region_code: region } });
-    }
-
-    // normalize numeric line fields and sum
-    pipeline.push({
-      $addFields: {
-        lineValue: {
-          $toDouble: {
-            $ifNull: ["$line_items.TOTAL_LINE_PRICE", "$line_items.LINE_TOTAL", 0]
-          }
-        },
-        lineQty: {
-          $toDouble: {
-            $ifNull: ["$line_items.QUANTITY", "$line_items.QTY", 0]
+      { $unwind: { path: "$line_items", preserveNullAndEmptyArrays: false } },
+      {
+        $addFields: {
+          lineValue: {
+            $toDouble: {
+              $ifNull: ["$line_items.TOTAL_LINE_PRICE", "$line_items.LINE_TOTAL", 0]
+            }
+          },
+          lineQty: {
+            $toDouble: {
+              $ifNull: ["$line_items.QUANTITY", "$line_items.QTY", 0]
+            }
           }
         }
+      },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: "$lineValue" },
+          totalQuantity: { $sum: "$lineQty" },
+          transactionCount: { $sum: 1 }
+        }
       }
-    });
-
-    pipeline.push({
-      $group: {
-        _id: null,
-        totalRevenue: { $sum: "$lineValue" },
-        totalQuantity: { $sum: "$lineQty" },
-        transactionCount: { $sum: 1 }
-      }
-    });
+    ];
 
     const results = await mongoose.connection.db
       .collection('Sales_Header')
