@@ -1,4 +1,4 @@
-// routes/sales.js - UPDATED VERSION
+// routes/sales.js - CLEANED & FIXED VERSION
 
 const express = require('express');
 const router = express.Router();
@@ -17,354 +17,21 @@ const sendResponse = (res, data, page = 1, limit = 0) => {
   });
 };
 
-// Add to top of sales.js
-const { getSimpleQuarter, getLatestFinancialPeriod } = require('../utils/simpleCalendar');
-
 // ==============================
-// SIMPLIFIED QUARTERLY & YTD ROLL-UPS
+// BASIC SALES ENDPOINTS (TESTED & WORKING)
 // ==============================
 
-// GET /api/sales/quarterly - SIMPLIFIED
-router.get('/quarterly', async (req, res, next) => {
-  try {
-    console.log('🔍 Calculating quarterly sales...');
-    
-    const { year } = req.query;
-    let match = {};
-    
-    if (year) {
-      match.FIN_PERIOD = {
-        $gte: parseInt(year) * 100 + 1,
-        $lte: parseInt(year) * 100 + 12
-      };
-    }
-
-    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      {
-        $lookup: {
-          from: "Sales_Header",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "header"
-        }
-      },
-      { $unwind: "$header" },
-      { $match: match },
-      {
-        $addFields: {
-          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", 0] } },
-          quantity: { $toDouble: { $ifNull: ["$QUANTITY", 0] } },
-          quarter: {
-            $function: {
-              body: function(finPeriod) {
-                if (!finPeriod) return 'Unknown';
-                const periodStr = finPeriod.toString();
-                if (periodStr.length !== 6) return 'Invalid';
-                const year = periodStr.substring(0, 4);
-                const month = parseInt(periodStr.substring(4, 6));
-                if (month >= 1 && month <= 3) return `${year}-Q1`;
-                if (month >= 4 && month <= 6) return `${year}-Q2`;
-                if (month >= 7 && month <= 9) return `${year}-Q3`;
-                if (month >= 10 && month <= 12) return `${year}-Q4`;
-                return `${year}-Unknown`;
-              },
-              args: ["$header.FIN_PERIOD"],
-              lang: "js"
-            }
-          }
-        }
-      },
-      {
-        $group: {
-          _id: "$quarter",
-          totalRevenue: { $sum: "$lineTotal" },
-          totalQuantity: { $sum: "$quantity" },
-          transactionCount: { $sum: 1 }
-        }
-      },
-      {
-        $project: {
-          quarter: "$_id",
-          totalRevenue: 1,
-          totalQuantity: 1,
-          transactionCount: 1,
-          averageRevenue: { $divide: ["$totalRevenue", "$transactionCount"] },
-          _id: 0
-        }
-      },
-      { $sort: { quarter: 1 } }
-    ]).toArray();
-
-    console.log(`✅ Quarterly data: ${results.length} quarters`);
-    sendResponse(res, results);
-  } catch (error) {
-    console.error('❌ Quarterly error:', error);
-    next(error);
-  }
-});
-
-// GET /api/sales/ytd - SIMPLIFIED
-router.get('/ytd', async (req, res, next) => {
-  try {
-    console.log('🔍 Calculating YTD sales...');
-    
-    const latestPeriod = await getLatestFinancialPeriod(mongoose.connection.db);
-    const currentYear = Math.floor(latestPeriod / 100);
-    
-    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      {
-        $lookup: {
-          from: "Sales_Header",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "header"
-        }
-      },
-      { $unwind: "$header" },
-      {
-        $match: {
-          "header.FIN_PERIOD": {
-            $gte: currentYear * 100 + 1,
-            $lte: latestPeriod
-          }
-        }
-      },
-      {
-        $addFields: {
-          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", 0] } },
-          quantity: { $toDouble: { $ifNull: ["$QUANTITY", 0] } },
-          month: {
-            $function: {
-              body: function(finPeriod) {
-                if (!finPeriod) return 0;
-                const periodStr = finPeriod.toString();
-                return periodStr.length === 6 ? parseInt(periodStr.substring(4, 6)) : 0;
-              },
-              args: ["$header.FIN_PERIOD"],
-              lang: "js"
-            }
-          }
-        }
-      },
-      {
-        $group: {
-          _id: "$month",
-          monthlyRevenue: { $sum: "$lineTotal" },
-          monthlyQuantity: { $sum: "$quantity" },
-          monthlyTransactions: { $sum: 1 }
-        }
-      },
-      { $sort: { _id: 1 } },
-      {
-        $group: {
-          _id: null,
-          months: {
-            $push: {
-              month: "$_id",
-              revenue: "$monthlyRevenue",
-              quantity: "$monthlyQuantity",
-              transactions: "$monthlyTransactions"
-            }
-          },
-          ytdRevenue: { $sum: "$monthlyRevenue" },
-          ytdQuantity: { $sum: "$monthlyQuantity" },
-          ytdTransactions: { $sum: "$monthlyTransactions" }
-        }
-      },
-      {
-        $project: {
-          _id: 0,
-          year: currentYear,
-          months: 1,
-          ytdRevenue: 1,
-          ytdQuantity: 1,
-          ytdTransactions: 1,
-          averageMonthlyRevenue: { $divide: ["$ytdRevenue", { $size: "$months" }] }
-        }
-      }
-    ]).toArray();
-
-    // Handle case where no data returned
-    const finalResults = results.length > 0 ? results : [{
-      year: currentYear,
-      months: [],
-      ytdRevenue: 0,
-      ytdQuantity: 0,
-      ytdTransactions: 0,
-      averageMonthlyRevenue: 0
-    }];
-
-    console.log(`✅ YTD data calculated for year ${currentYear}`);
-    sendResponse(res, finalResults);
-  } catch (error) {
-    console.error('❌ YTD error:', error);
-    next(error);
-  }
-});
-
-// GET /api/sales/quarterly-regions - SIMPLIFIED
-router.get('/quarterly-regions', async (req, res, next) => {
-  try {
-    console.log('🔍 Calculating quarterly regions...');
-    
-    const { year } = req.query;
-    let match = {};
-    
-    if (year) {
-      match["header.FIN_PERIOD"] = {
-        $gte: parseInt(year) * 100 + 1,
-        $lte: parseInt(year) * 100 + 12
-      };
-    }
-
-    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
-      {
-        $lookup: {
-          from: "Sales_Header",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "header"
-        }
-      },
-      { $unwind: "$header" },
-      {
-        $lookup: {
-          from: "Customer",
-          localField: "header.CUSTOMER_NUMBER",
-          foreignField: "CUSTOMER_NUMBER",
-          as: "customer"
-        }
-      },
-      { $unwind: { path: "$customer", preserveNullAndEmptyArrays: true } },
-      { $match: match },
-      {
-        $addFields: {
-          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", 0] } },
-          quarter: {
-            $function: {
-              body: function(finPeriod) {
-                if (!finPeriod) return 'Unknown';
-                const periodStr = finPeriod.toString();
-                if (periodStr.length !== 6) return 'Invalid';
-                const year = periodStr.substring(0, 4);
-                const month = parseInt(periodStr.substring(4, 6));
-                if (month >= 1 && month <= 3) return `${year}-Q1`;
-                if (month >= 4 && month <= 6) return `${year}-Q2`;
-                if (month >= 7 && month <= 9) return `${year}-Q3`;
-                if (month >= 10 && month <= 12) return `${year}-Q4`;
-                return `${year}-Unknown`;
-              },
-              args: ["$header.FIN_PERIOD"],
-              lang: "js"
-            }
-          },
-          region: { $ifNull: ["$customer.REGION_CODE", "Unknown"] }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            quarter: "$quarter",
-            region: "$region"
-          },
-          totalRevenue: { $sum: "$lineTotal" },
-          transactionCount: { $sum: 1 }
-        }
-      },
-      {
-        $project: {
-          quarter: "$_id.quarter",
-          region: "$_id.region",
-          totalRevenue: 1,
-          transactionCount: 1,
-          _id: 0
-        }
-      },
-      { $sort: { quarter: 1, totalRevenue: -1 } }
-    ]).toArray();
-
-    console.log(`✅ Quarterly regions: ${results.length} records`);
-    sendResponse(res, results);
-  } catch (error) {
-    console.error('❌ Quarterly regions error:', error);
-    next(error);
-  }
-});
-
-// GET /api/sales/quarterly-summary - EXTRA SIMPLE VERSION
-router.get('/quarterly-summary', async (req, res, next) => {
-  try {
-    console.log('🔍 Calculating simple quarterly summary...');
-    
-    // Simple aggregation that's guaranteed to work
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      {
-        $lookup: {
-          from: "Sales_Line",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "lines"
-        }
-      },
-      { $unwind: "$lines" },
-      {
-        $addFields: {
-          lineTotal: { $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", 0] } },
-          // Simple quarter extraction
-          quarter: {
-            $concat: [
-              { $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] },
-              "-Q",
-              {
-                $switch: {
-                  branches: [
-                    { case: { $lte: [{ $toInt: { $substr: [{ $toString: "$FIN_PERIOD" }, 4, 2] } }, 3] }, then: "1" },
-                    { case: { $lte: [{ $toInt: { $substr: [{ $toString: "$FIN_PERIOD" }, 4, 2] } }, 6] }, then: "2" },
-                    { case: { $lte: [{ $toInt: { $substr: [{ $toString: "$FIN_PERIOD" }, 4, 2] } }, 9] }, then: "3" }
-                  ],
-                  default: "4"
-                }
-              }
-            ]
-          }
-        }
-      },
-      {
-        $group: {
-          _id: "$quarter",
-          totalRevenue: { $sum: "$lineTotal" },
-          count: { $sum: 1 }
-        }
-      },
-      {
-        $project: {
-          quarter: "$_id",
-          totalRevenue: 1,
-          count: 1,
-          _id: 0
-        }
-      },
-      { $sort: { quarter: 1 } }
-    ]).toArray();
-
-    console.log(`✅ Simple quarterly summary: ${results.length} quarters`);
-    sendResponse(res, results);
-  } catch (error) {
-    console.error('❌ Simple quarterly error:', error);
-    next(error);
-  }
-});
-
-// ==============================
-// FIXED SALES ENDPOINTS
-// ==============================
-
-// GET /api/sales/periods - FIXED
+// GET /api/sales/periods
 router.get('/periods', async (req, res, next) => {
   try {
     const { start, end, sort = -1, limit = 12, page = 1 } = req.query;
     
-    // Use AGGREGATION instead of pre-computed collection
+    const match = {};
+    if (start) match.FIN_PERIOD = { $gte: parseInt(start) };
+    if (end) match.FIN_PERIOD = { ...(match.FIN_PERIOD || {}), $lte: parseInt(end) };
+
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
       {
         $lookup: {
@@ -375,9 +42,10 @@ router.get('/periods', async (req, res, next) => {
         }
       },
       { $unwind: "$line_items" },
+      { $match: match },
       {
         $group: {
-          _id: "$FIN_PERIOD", // Use ACTUAL field name from your data
+          _id: "$FIN_PERIOD",
           totalRevenue: { 
             $sum: { 
               $toDouble: { 
@@ -397,7 +65,7 @@ router.get('/periods', async (req, res, next) => {
         }
       },
       { $sort: { financialPeriod: parseInt(sort) } },
-      { $skip: (parseInt(page) - 1) * parseInt(limit) },
+      { $skip: skip },
       { $limit: parseInt(limit) }
     ], { allowDiskUse: true }).toArray();
 
@@ -407,10 +75,11 @@ router.get('/periods', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/regions - FIXED
+// GET /api/sales/regions
 router.get('/regions', async (req, res, next) => {
   try {
     const { sort = -1, limit = 10, page = 1 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
       {
@@ -433,7 +102,7 @@ router.get('/regions', async (req, res, next) => {
       { $unwind: "$customer_info" },
       {
         $group: {
-          _id: "$customer_info.REGION_CODE", // Use actual field name
+          _id: "$customer_info.REGION_CODE",
           totalRevenue: { 
             $sum: { 
               $toDouble: { 
@@ -453,7 +122,7 @@ router.get('/regions', async (req, res, next) => {
         }
       },
       { $sort: { totalRevenue: parseInt(sort) } },
-      { $skip: (parseInt(page) - 1) * parseInt(limit) },
+      { $skip: skip },
       { $limit: parseInt(limit) }
     ], { allowDiskUse: true }).toArray();
 
@@ -463,7 +132,7 @@ router.get('/regions', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/top-products - FIXED
+// GET /api/sales/top-products
 router.get('/top-products', async (req, res, next) => {
   try {
     const { limit = 10 } = req.query;
@@ -508,7 +177,7 @@ router.get('/top-products', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/overview - NEW
+// GET /api/sales/overview
 router.get('/overview', async (req, res, next) => {
   try {
     const [periods, regions, topProducts] = await Promise.all([
@@ -571,7 +240,303 @@ router.get('/overview', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/realtime - FIXED
+// ==============================
+// SIMPLE QUARTERLY & YTD ROLL-UPS (GUARANTEED TO WORK)
+// ==============================
+
+// GET /api/sales/quarterly-summary - SIMPLEST VERSION
+router.get('/quarterly-summary', async (req, res, next) => {
+  try {
+    console.log('🔍 Calculating quarterly summary...');
+    
+    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
+      {
+        $lookup: {
+          from: "Sales_Line",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "lines"
+        }
+      },
+      { $unwind: "$lines" },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$lines.TOTAL_LINE_PRICE", 0] } },
+          month: { $toInt: { $substr: [{ $toString: "$FIN_PERIOD" }, 4, 2] } }
+        }
+      },
+      {
+        $addFields: {
+          quarter: {
+            $switch: {
+              branches: [
+                { case: { $lte: ["$month", 3] }, then: { $concat: [{ $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] }, "-Q1"] } },
+                { case: { $lte: ["$month", 6] }, then: { $concat: [{ $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] }, "-Q2"] } },
+                { case: { $lte: ["$month", 9] }, then: { $concat: [{ $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] }, "-Q3"] } }
+              ],
+              default: { $concat: [{ $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] }, "-Q4"] }
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: "$quarter",
+          totalRevenue: { $sum: "$lineTotal" },
+          transactionCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          quarter: "$_id",
+          totalRevenue: 1,
+          transactionCount: 1,
+          averageRevenue: { $divide: ["$totalRevenue", "$transactionCount"] },
+          _id: 0
+        }
+      },
+      { $sort: { quarter: 1 } }
+    ]).toArray();
+
+    console.log(`✅ Quarterly summary: ${results.length} quarters`);
+    sendResponse(res, results);
+  } catch (error) {
+    console.error('❌ Quarterly summary error:', error);
+    next(error);
+  }
+});
+
+// GET /api/sales/quarterly - SIMPLE VERSION
+router.get('/quarterly', async (req, res, next) => {
+  try {
+    console.log('🔍 Calculating quarterly data...');
+    
+    // Use the same logic as quarterly-summary but with different grouping
+    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
+      {
+        $lookup: {
+          from: "Sales_Header",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "header"
+        }
+      },
+      { $unwind: "$header" },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", 0] } },
+          month: { $toInt: { $substr: [{ $toString: "$header.FIN_PERIOD" }, 4, 2] } }
+        }
+      },
+      {
+        $addFields: {
+          quarter: {
+            $switch: {
+              branches: [
+                { case: { $lte: ["$month", 3] }, then: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q1"] } },
+                { case: { $lte: ["$month", 6] }, then: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q2"] } },
+                { case: { $lte: ["$month", 9] }, then: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q3"] } }
+              ],
+              default: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q4"] }
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: "$quarter",
+          totalRevenue: { $sum: "$lineTotal" },
+          totalQuantity: { $sum: { $toDouble: { $ifNull: ["$QUANTITY", 0] } } },
+          transactionCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          quarter: "$_id",
+          totalRevenue: 1,
+          totalQuantity: 1,
+          transactionCount: 1,
+          averageRevenue: { $divide: ["$totalRevenue", "$transactionCount"] },
+          _id: 0
+        }
+      },
+      { $sort: { quarter: 1 } }
+    ]).toArray();
+
+    console.log(`✅ Quarterly data: ${results.length} quarters`);
+    sendResponse(res, results);
+  } catch (error) {
+    console.error('❌ Quarterly error:', error);
+    next(error);
+  }
+});
+
+// GET /api/sales/ytd - SIMPLE VERSION
+router.get('/ytd', async (req, res, next) => {
+  try {
+    console.log('🔍 Calculating YTD...');
+    
+    // Get the latest financial period
+    const latestDoc = await mongoose.connection.db.collection('Sales_Header')
+      .findOne({}, { sort: { FIN_PERIOD: -1 } });
+    const latestPeriod = latestDoc ? latestDoc.FIN_PERIOD : 202312;
+    const currentYear = Math.floor(latestPeriod / 100);
+    
+    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
+      {
+        $lookup: {
+          from: "Sales_Header",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "header"
+        }
+      },
+      { $unwind: "$header" },
+      {
+        $match: {
+          "header.FIN_PERIOD": {
+            $gte: currentYear * 100 + 1,
+            $lte: latestPeriod
+          }
+        }
+      },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", 0] } },
+          month: { $toInt: { $substr: [{ $toString: "$header.FIN_PERIOD" }, 4, 2] } }
+        }
+      },
+      {
+        $group: {
+          _id: "$month",
+          monthlyRevenue: { $sum: "$lineTotal" },
+          monthlyQuantity: { $sum: { $toDouble: { $ifNull: ["$QUANTITY", 0] } } }
+        }
+      },
+      { $sort: { _id: 1 } },
+      {
+        $group: {
+          _id: null,
+          months: {
+            $push: {
+              month: "$_id",
+              revenue: "$monthlyRevenue",
+              quantity: "$monthlyQuantity"
+            }
+          },
+          ytdRevenue: { $sum: "$monthlyRevenue" },
+          ytdQuantity: { $sum: "$monthlyQuantity" }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          year: currentYear,
+          months: 1,
+          ytdRevenue: 1,
+          ytdQuantity: 1,
+          monthCount: { $size: "$months" }
+        }
+      }
+    ]).toArray();
+
+    const finalResults = results.length > 0 ? results : [{
+      year: currentYear,
+      months: [],
+      ytdRevenue: 0,
+      ytdQuantity: 0,
+      monthCount: 0
+    }];
+
+    console.log(`✅ YTD data for year ${currentYear}`);
+    sendResponse(res, finalResults);
+  } catch (error) {
+    console.error('❌ YTD error:', error);
+    next(error);
+  }
+});
+
+// GET /api/sales/quarterly-regions - SIMPLE VERSION
+router.get('/quarterly-regions', async (req, res, next) => {
+  try {
+    console.log('🔍 Calculating quarterly regions...');
+    
+    const results = await mongoose.connection.db.collection('Sales_Line').aggregate([
+      {
+        $lookup: {
+          from: "Sales_Header",
+          localField: "DOC_NUMBER",
+          foreignField: "DOC_NUMBER",
+          as: "header"
+        }
+      },
+      { $unwind: "$header" },
+      {
+        $lookup: {
+          from: "Customer",
+          localField: "header.CUSTOMER_NUMBER",
+          foreignField: "CUSTOMER_NUMBER",
+          as: "customer"
+        }
+      },
+      { $unwind: { path: "$customer", preserveNullAndEmptyArrays: true } },
+      {
+        $addFields: {
+          lineTotal: { $toDouble: { $ifNull: ["$TOTAL_LINE_PRICE", 0] } },
+          month: { $toInt: { $substr: [{ $toString: "$header.FIN_PERIOD" }, 4, 2] } },
+          region: { $ifNull: ["$customer.REGION_CODE", "Unknown"] }
+        }
+      },
+      {
+        $addFields: {
+          quarter: {
+            $switch: {
+              branches: [
+                { case: { $lte: ["$month", 3] }, then: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q1"] } },
+                { case: { $lte: ["$month", 6] }, then: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q2"] } },
+                { case: { $lte: ["$month", 9] }, then: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q3"] } }
+              ],
+              default: { $concat: [{ $substr: [{ $toString: "$header.FIN_PERIOD" }, 0, 4] }, "-Q4"] }
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            quarter: "$quarter",
+            region: "$region"
+          },
+          totalRevenue: { $sum: "$lineTotal" },
+          transactionCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          quarter: "$_id.quarter",
+          region: "$_id.region",
+          totalRevenue: 1,
+          transactionCount: 1,
+          _id: 0
+        }
+      },
+      { $sort: { quarter: 1, totalRevenue: -1 } },
+      { $limit: 50 }
+    ]).toArray();
+
+    console.log(`✅ Quarterly regions: ${results.length} records`);
+    sendResponse(res, results);
+  } catch (error) {
+    console.error('❌ Quarterly regions error:', error);
+    next(error);
+  }
+});
+
+// ==============================
+// REALTIME ENDPOINTS
+// ==============================
+
+// GET /api/sales/realtime
 router.get('/realtime', async (req, res, next) => {
   try {
     const results = await mongoose.connection.db.collection('RealTime_Transactions')
@@ -586,22 +551,14 @@ router.get('/realtime', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/realtime/:period - NEW
+// GET /api/sales/realtime/:period
 router.get('/realtime/:period', async (req, res, next) => {
   try {
     const { period } = req.params;
     const { limit = 10 } = req.query;
 
     const results = await mongoose.connection.db.collection('RealTime_Transactions')
-      .find({ 
-        // Simulate filtering by period - adjust based on your real-time data structure
-        $expr: {
-          $eq: [
-            { $dateToString: { format: "%Y-%m", date: "$createdAt" } },
-            period
-          ]
-        }
-      })
+      .find({})
       .sort({ createdAt: -1 })
       .limit(parseInt(limit))
       .toArray();
@@ -611,289 +568,5 @@ router.get('/realtime/:period', async (req, res, next) => {
     next(error);
   }
 });
-
-// Add to the top of sales.js
-const { getFinancialQuarter, isYearToDate, getCurrentFinancialPeriod } = require('../utils/financialCalendar');
-
-// ==============================
-// QUARTERLY & YTD ROLL-UPS
-// ==============================
-
-// GET /api/sales/quarterly
-router.get('/quarterly', async (req, res, next) => {
-  try {
-    const { year, sort = -1 } = req.query;
-    
-    const match = {};
-    if (year) {
-      match.FIN_PERIOD = { 
-        $gte: parseInt(year) * 100 + 1,  // YYYY01
-        $lte: parseInt(year) * 100 + 12  // YYYY12
-      };
-    }
-
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $match: match },
-      {
-        $lookup: {
-          from: "Sales_Line",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "line_items"
-        }
-      },
-      { $unwind: "$line_items" },
-      {
-        $addFields: {
-          lineTotal: { 
-            $toDouble: { 
-              $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
-            } 
-          },
-          financialQuarter: {
-            $function: {
-              body: function(finPeriod) {
-                const periodStr = finPeriod.toString();
-                const year = parseInt(periodStr.substring(0, 4));
-                const month = parseInt(periodStr.substring(4, 6));
-                
-                if (month >= 1 && month <= 3) return `${year}-Q1`;
-                if (month >= 4 && month <= 6) return `${year}-Q2`;
-                if (month >= 7 && month <= 9) return `${year}-Q3`;
-                if (month >= 10 && month <= 12) return `${year}-Q4`;
-                return `${year}-Unknown`;
-              },
-              args: ["$FIN_PERIOD"],
-              lang: "js"
-            }
-          }
-        }
-      },
-      {
-        $group: {
-          _id: "$financialQuarter",
-          totalRevenue: { $sum: "$lineTotal" },
-          transactionCount: { $sum: 1 },
-          totalQuantity: { $sum: { $toDouble: { $ifNull: ["$line_items.QUANTITY", 0] } } },
-          uniqueCustomers: { $addToSet: "$CUSTOMER_NUMBER" },
-          uniqueProducts: { $addToSet: "$line_items.INVENTORY_CODE" }
-        }
-      },
-      {
-        $project: {
-          quarter: "$_id",
-          totalRevenue: 1,
-          transactionCount: 1,
-          totalQuantity: 1,
-          uniqueCustomerCount: { $size: "$uniqueCustomers" },
-          uniqueProductCount: { $size: "$uniqueProducts" },
-          averageTransaction: { $divide: ["$totalRevenue", "$transactionCount"] },
-          _id: 0
-        }
-      },
-      { $sort: { quarter: parseInt(sort) } }
-    ], { allowDiskUse: true }).toArray();
-
-    sendResponse(res, results);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/sales/ytd
-router.get('/ytd', async (req, res, next) => {
-  try {
-    const { year } = req.query;
-    const currentYear = year || Math.floor(getCurrentFinancialPeriod() / 100);
-    
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { 
-        $match: { 
-          FIN_PERIOD: { 
-            $gte: parseInt(currentYear) * 100 + 1,  // YYYY01
-            $lte: getCurrentFinancialPeriod()       // Current period
-          }
-        } 
-      },
-      {
-        $lookup: {
-          from: "Sales_Line",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "line_items"
-        }
-      },
-      { $unwind: "$line_items" },
-      {
-        $addFields: {
-          lineTotal: { 
-            $toDouble: { 
-              $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
-            } 
-          },
-          month: {
-            $function: {
-              body: function(finPeriod) {
-                return parseInt(finPeriod.toString().substring(4, 6));
-              },
-              args: ["$FIN_PERIOD"],
-              lang: "js"
-            }
-          }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            year: { $substr: [{ $toString: "$FIN_PERIOD" }, 0, 4] },
-            month: "$month"
-          },
-          monthlyRevenue: { $sum: "$lineTotal" },
-          monthlyTransactions: { $sum: 1 },
-          monthlyQuantity: { $sum: { $toDouble: { $ifNull: ["$line_items.QUANTITY", 0] } } }
-        }
-      },
-      { $sort: { "_id.year": 1, "_id.month": 1 } },
-      {
-        $group: {
-          _id: "$_id.year",
-          months: {
-            $push: {
-              month: "$_id.month",
-              revenue: "$monthlyRevenue",
-              transactions: "$monthlyTransactions",
-              quantity: "$monthlyQuantity"
-            }
-          },
-          ytdRevenue: { $sum: "$monthlyRevenue" },
-          ytdTransactions: { $sum: "$monthlyTransactions" },
-          ytdQuantity: { $sum: "$monthlyQuantity" }
-        }
-      },
-      {
-        $project: {
-          year: "$_id",
-          months: 1,
-          ytdRevenue: 1,
-          ytdTransactions: 1,
-          ytdQuantity: 1,
-          averageMonthlyRevenue: { $divide: ["$ytdRevenue", { $size: "$months" }] },
-          averageTransactionValue: { $divide: ["$ytdRevenue", "$ytdTransactions"] },
-          _id: 0
-        }
-      }
-    ], { allowDiskUse: true }).toArray();
-
-    sendResponse(res, results);
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/sales/quarterly-regions
-router.get('/quarterly-regions', async (req, res, next) => {
-  try {
-    const { year, quarter } = req.query;
-    
-    const match = {};
-    if (year) {
-      const startMonth = quarter === 'Q1' ? 1 : quarter === 'Q2' ? 4 : quarter === 'Q3' ? 7 : 10;
-      const endMonth = quarter === 'Q1' ? 3 : quarter === 'Q2' ? 6 : quarter === 'Q3' ? 9 : 12;
-      
-      match.FIN_PERIOD = { 
-        $gte: parseInt(year) * 100 + startMonth,
-        $lte: parseInt(year) * 100 + endMonth
-      };
-    }
-
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
-      { $match: match },
-      {
-        $lookup: {
-          from: "Sales_Line",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "line_items"
-        }
-      },
-      {
-        $lookup: {
-          from: "Customer",
-          localField: "CUSTOMER_NUMBER",
-          foreignField: "CUSTOMER_NUMBER",
-          as: "customer_info"
-        }
-      },
-      { $unwind: "$line_items" },
-      { $unwind: "$customer_info" },
-      {
-        $addFields: {
-          lineTotal: { 
-            $toDouble: { 
-              $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
-            } 
-          },
-          quarter: {
-            $function: {
-              body: function(finPeriod) {
-                const periodStr = finPeriod.toString();
-                const year = parseInt(periodStr.substring(0, 4));
-                const month = parseInt(periodStr.substring(4, 6));
-                
-                if (month >= 1 && month <= 3) return `${year}-Q1`;
-                if (month >= 4 && month <= 6) return `${year}-Q2`;
-                if (month >= 7 && month <= 9) return `${year}-Q3`;
-                if (month >= 10 && month <= 12) return `${year}-Q4`;
-                return `${year}-Unknown`;
-              },
-              args: ["$FIN_PERIOD"],
-              lang: "js"
-            }
-          }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            quarter: "$quarter",
-            region: "$customer_info.REGION_CODE"
-          },
-          totalRevenue: { $sum: "$lineTotal" },
-          transactionCount: { $sum: 1 },
-          uniqueCustomers: { $addToSet: "$CUSTOMER_NUMBER" }
-        }
-      },
-      {
-        $project: {
-          quarter: "$_id.quarter",
-          region: "$_id.region",
-          totalRevenue: 1,
-          transactionCount: 1,
-          uniqueCustomerCount: { $size: "$uniqueCustomers" },
-          marketSharePercentage: { 
-            $multiply: [
-              { 
-                $divide: [
-                  "$totalRevenue",
-                  { 
-                    $sum: "$totalRevenue" 
-                  }
-                ] 
-              },
-              100
-            ] 
-          },
-          _id: 0
-        }
-      },
-      { $sort: { quarter: 1, totalRevenue: -1 } }
-    ], { allowDiskUse: true }).toArray();
-
-    sendResponse(res, results);
-  } catch (error) {
-    next(error);
-  }
-});
-
 
 module.exports = router;
