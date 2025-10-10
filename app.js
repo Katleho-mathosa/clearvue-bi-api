@@ -96,16 +96,18 @@ app.use((err, req, res, next) => {
 
 app.get('/api/sales-summary/:period', async (req, res) => {
   try {
-    const period = parseInt(req.params.period); // convert "201602" to number
+    const period = parseInt(req.params.period);
     const data = await db.collection('sales_summary_period')
       .find({ financialPeriod: period })
       .toArray();
-    res.json({ success: true, data });
+
+    res.json({ success: true, data, meta: { total: data.length } });
   } catch (error) {
     console.error(error);
     res.status(500).json({ success: false, message: error.message });
   }
 });
+
 
 // Start server
 app.listen(PORT, () => {
