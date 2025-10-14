@@ -75,58 +75,55 @@ router.get('/periods', async (req, res, next) => {
   }
 });
 
-// GET /api/sales/regions
+// GET /api/sales/regions?sort=-1&limit=10&page=1
 router.get('/regions', async (req, res, next) => {
   try {
     const { sort = -1, limit = 10, page = 1 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const results = await mongoose.connection.db.collection('Sales_Header').aggregate([
+    const pipeline = [
+      // Join Customer collection with Customer_Regions to get region description
       {
         $lookup: {
-          from: "Sales_Line",
-          localField: "DOC_NUMBER",
-          foreignField: "DOC_NUMBER",
-          as: "line_items"
+          from: "Customer_Regions",
+          localField: "REGION_CODE",
+          foreignField: "REGION_CODE",
+          as: "region_info"
         }
       },
-      {
-        $lookup: {
-          from: "Customer",
-          localField: "CUSTOMER_NUMBER", 
-          foreignField: "CUSTOMER_NUMBER",
-          as: "customer_info"
-        }
-      },
-      { $unwind: "$line_items" },
-      { $unwind: "$customer_info" },
+      { $unwind: "$region_info" },
+
+      // Group by REGION_CODE and REGION_DESC
       {
         $group: {
-          _id: "$customer_info.REGION_CODE",
-          totalRevenue: { 
-            $sum: { 
-              $toDouble: { 
-                $ifNull: ["$line_items.TOTAL_LINE_PRICE", 0] 
-              } 
-            } 
-          },
-          customerCount: { $addToSet: "$CUSTOMER_NUMBER" }
+          _id: "$REGION_CODE",
+          region_name: { $first: "$region_info.REGION_DESC" },
+          totalRevenue: { $sum: "$totalRevenue" }, // adjust if field name differs
+          customerCount: { $sum: 1 }
         }
       },
-      {
-        $project: {
-          region: "$_id",
-          totalRevenue: 1,
-          customerCount: { $size: "$customerCount" },
-          _id: 0
-        }
-      },
+
+      // Sort and paginate
       { $sort: { totalRevenue: parseInt(sort) } },
       { $skip: skip },
       { $limit: parseInt(limit) }
-    ], { allowDiskUse: true }).toArray();
+    ];
 
-    sendResponse(res, results, page, limit);
+    const results = await mongoose.connection.db
+      .collection('Customer') // or 'sales_summary_region' if you aggregate from summary
+      .aggregate(pipeline, { allowDiskUse: true })
+      .toArray();
+
+    res.json({
+      success: true,
+      data: results.map(r => ({
+        regionCode: r._id,
+        regionName: r.region_name,
+        totalRevenue: r.totalRevenue,
+        customerCount: r.customerCount
+      })),
+      meta: { total: results.length, page: parseInt(page), limit: parseInt(limit) }
+    });
   } catch (error) {
     next(error);
   }
