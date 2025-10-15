@@ -566,50 +566,102 @@ router.get('/realtime/:period', async (req, res, next) => {
   }
 });
 
-// Add to your existing sales.js - SIMPLE FINANCIAL CALENDAR ROUTES
-
-// GET /api/sales/financial-calendar-test - SIMPLE VERSION
+// GET /api/sales/financial-calendar-test - FIXED VERSION
 router.get('/financial-calendar-test', async (req, res, next) => {
   try {
-    console.log('🔍 Testing simple financial calendar...');
+    console.log('🔍 Testing REAL financial calendar logic...');
     
-    // Simple test without complex dependencies
+    // CLEARVUE'S ACTUAL RULE:
+    // Financial month runs from last Saturday of previous month to last Friday of current month
+    
+    function calculateFinancialPeriod(date) {
+      const inputDate = new Date(date);
+      const year = inputDate.getFullYear();
+      const month = inputDate.getMonth(); // 0-11
+      
+      // Get last Friday of current month
+      const lastDayOfMonth = new Date(year, month + 1, 0);
+      const lastFriday = new Date(lastDayOfMonth);
+      lastFriday.setDate(lastDayOfMonth.getDate() - ((lastDayOfMonth.getDay() + 1) % 7));
+      
+      // Get last Saturday of previous month
+      const lastDayOfPrevMonth = new Date(year, month, 0);
+      const lastSaturdayPrev = new Date(lastDayOfPrevMonth);
+      lastSaturdayPrev.setDate(lastDayOfPrevMonth.getDate() - ((lastDayOfPrevMonth.getDay() + 2) % 7));
+      
+      // Check if date falls in current financial month
+      if (inputDate >= lastSaturdayPrev && inputDate <= lastFriday) {
+        // Date belongs to current month's financial period
+        return {
+          financialPeriod: `${year}-M${(month + 1).toString().padStart(2, '0')}`,
+          periodStart: lastSaturdayPrev,
+          periodEnd: lastFriday,
+          financialMonth: month + 1,
+          explanation: `Financial ${getMonthName(month + 1)} ${year}`
+        };
+      } else if (inputDate < lastSaturdayPrev) {
+        // Date belongs to previous month's financial period
+        const prevMonth = month === 0 ? 11 : month - 1;
+        const prevYear = month === 0 ? year - 1 : year;
+        return {
+          financialPeriod: `${prevYear}-M${(prevMonth + 1).toString().padStart(2, '0')}`,
+          financialMonth: prevMonth + 1,
+          explanation: `Financial ${getMonthName(prevMonth + 1)} ${prevYear} (carryover from previous period)`
+        };
+      } else {
+        // Date belongs to next month's financial period
+        const nextMonth = month === 11 ? 0 : month + 1;
+        const nextYear = month === 11 ? year + 1 : year;
+        return {
+          financialPeriod: `${nextYear}-M${(nextMonth + 1).toString().padStart(2, '0')}`,
+          financialMonth: nextMonth + 1,
+          explanation: `Financial ${getMonthName(nextMonth + 1)} ${nextYear} (early start)`
+        };
+      }
+    }
+    
+    function getMonthName(month) {
+      const months = ['January', 'February', 'March', 'April', 'May', 'June', 
+                     'July', 'August', 'September', 'October', 'November', 'December'];
+      return months[month - 1];
+    }
+    
+    function getQuarter(month) {
+      if (month >= 1 && month <= 3) return 'Q1';
+      if (month >= 4 && month <= 6) return 'Q2';
+      if (month >= 7 && month <= 9) return 'Q3';
+      return 'Q4';
+    }
+
+    // TEST DATES THAT DEMONSTRATE THE CROSSOVER
     const testDates = [
-      new Date(2025, 0, 28),  // Jan 28, 2025
-      new Date(2025, 0, 31),  // Jan 31, 2025  
-      new Date(2025, 1, 1),   // Feb 1, 2025
-      new Date(2025, 1, 27),  // Feb 27, 2025
-      new Date(2025, 1, 28),  // Feb 28, 2025
+      new Date(2025, 0, 25),  // Jan 25 - Should be Financial Jan
+      new Date(2025, 0, 31),  // Jan 31 - Should be Financial Feb! (last Saturday of Jan)
+      new Date(2025, 1, 1),   // Feb 1 - Should be Financial Feb
+      new Date(2025, 1, 27),  // Feb 27 - Should be Financial Feb (last Friday of Feb)
+      new Date(2025, 1, 28),  // Feb 28 - Should be Financial Mar! (starts Feb 28)
+      new Date(2025, 2, 1),   // Mar 1 - Should be Financial Mar
     ];
     
     const testResults = testDates.map(date => {
-      const year = date.getFullYear();
-      const month = date.getMonth() + 1;
-      
-      // SIMPLE FINANCIAL PERIOD LOGIC:
-      // For prototype, financial period = calendar month
-      // This demonstrates the concept without complex date calculations
-      const financialPeriod = `${year}-M${month.toString().padStart(2, '0')}`;
-      
-      // SIMPLE QUARTER CALCULATION
-      let quarter;
-      if (month >= 1 && month <= 3) quarter = `${year}-Q1`;
-      else if (month >= 4 && month <= 6) quarter = `${year}-Q2`;
-      else if (month >= 7 && month <= 9) quarter = `${year}-Q3`;
-      else quarter = `${year}-Q4`;
+      const result = calculateFinancialPeriod(date);
+      const quarter = getQuarter(result.financialMonth);
       
       return {
         testDate: date.toDateString(),
-        financialPeriod,
-        quarter,
-        explanation: `Financial month ${month} (${financialPeriod}) corresponds to ${quarter}`
+        calendarMonth: getMonthName(date.getMonth() + 1),
+        financialPeriod: result.financialPeriod,
+        financialMonth: getMonthName(result.financialMonth),
+        quarter: `${date.getFullYear()}-${quarter}`,
+        explanation: result.explanation,
+        isCrossover: result.financialMonth !== (date.getMonth() + 1)
       };
     });
-    
-    // Test with actual data from database
+
+    // TEST WITH ACTUAL SALES DATA
     const sampleSales = await mongoose.connection.db.collection('Sales_Header')
       .find({})
-      .limit(3)
+      .limit(5)
       .toArray();
     
     const salesWithPeriods = sampleSales.map(sale => {
@@ -618,28 +670,47 @@ router.get('/financial-calendar-test', async (req, res, next) => {
         const [month, day, year] = sale.TRANS_DATE.split('/');
         const transDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
         
-        const financialPeriod = `${transDate.getFullYear()}-M${(transDate.getMonth() + 1).toString().padStart(2, '0')}`;
+        const financialResult = calculateFinancialPeriod(transDate);
+        const quarter = getQuarter(financialResult.financialMonth);
         
         return {
           docNumber: sale.DOC_NUMBER,
           transDate: sale.TRANS_DATE,
-          financialPeriod,
-          parsedDate: transDate.toDateString()
+          calendarMonth: getMonthName(transDate.getMonth() + 1),
+          financialPeriod: financialResult.financialPeriod,
+          financialMonth: getMonthName(financialResult.financialMonth),
+          quarter: `${transDate.getFullYear()}-${quarter}`,
+          isCrossover: financialResult.financialMonth !== (transDate.getMonth() + 1)
         };
       } catch (error) {
         return {
           docNumber: sale.DOC_NUMBER,
           transDate: sale.TRANS_DATE,
-          error: "Date parsing failed"
+          error: "Date parsing failed: " + error.message
         };
       }
     });
+
+    // DEMONSTRATE THE PATTERN
+    const patternExplanation = {
+      rule: "Financial month = Last Saturday of previous month to Last Friday of current month",
+      examples: [
+        "Financial Feb 2025 = Jan 31, 2025 to Feb 27, 2025",
+        "Financial Mar 2025 = Feb 28, 2025 to Mar 27, 2025", 
+        "Financial Apr 2025 = Mar 28, 2025 to Apr 25, 2025"
+      ],
+      businessRationale: "Aligns reporting with retail weekend cycles and provides consistent 4-week periods"
+    };
     
     sendResponse(res, {
       testResults,
       sampleSales: salesWithPeriods,
-      logicExplanation: "Financial period = Calendar month for prototype. Production would use exact last Saturday to last Friday logic.",
-      businessRule: "ClearVue's actual rule: Financial month runs from last Saturday of previous month to last Friday of current month"
+      patternExplanation,
+      summary: {
+        totalTested: testResults.length,
+        crossoversFound: testResults.filter(r => r.isCrossover).length,
+        implementation: "REAL ClearVue financial calendar logic implemented"
+      }
     });
     
   } catch (error) {
