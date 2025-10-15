@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClearVue Ltd - Financial Calendar Visualization</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header .subtitle {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px;
+        }
+
+        .explanation {
+            background: #f8fafc;
+            padding: 25px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            border-left: 4px solid #2563eb;
+        }
+
+        .calendar-comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        @media (max-width: 768px) {
+            .calendar-comparison {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .calendar {
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 25px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+        }
+
+        .calendar h3 {
+            color: #1e293b;
+            margin-bottom: 20px;
+            text-align: center;
+            font-size: 1.4em;
+        }
+
+        .calendar-grid {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 5px;
+            margin-bottom: 20px;
+        }
+
+        .day-header {
+            background: #64748b;
+            color: white;
+            padding: 10px;
+            text-align: center;
+            font-weight: bold;
+            border-radius: 5px;
+        }
+
+        .day {
+            background: #f1f5f9;
+            padding: 12px 5px;
+            text-align: center;
+            border-radius: 5px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+        }
+
+        .day:hover {
+            transform: scale(1.05);
+            box-shadow: 0 3px 10px rgba(0,0,0,0.2);
+        }
+
+        .financial-period {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
+            font-weight: bold;
+        }
+
+        .outside-period {
+            background: #cbd5e1;
+            color: #64748b;
+        }
+
+        .period-marker {
+            background: #dc2626;
+            color: white;
+            font-weight: bold;
+        }
+
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .legend-color {
+            width: 20px;
+            height: 20px;
+            border-radius: 4px;
+        }
+
+        .key-points {
+            background: #fffbeb;
+            border: 2px solid #f59e0b;
+            border-radius: 10px;
+            padding: 25px;
+            margin-top: 30px;
+        }
+
+        .key-points h3 {
+            color: #d97706;
+            margin-bottom: 15px;
+        }
+
+        .key-points ul {
+            list-style: none;
+        }
+
+        .key-points li {
+            padding: 8px 0;
+            border-bottom: 1px solid #fed7aa;
+        }
+
+        .key-points li:last-child {
+            border-bottom: none;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .month-selector {
+            padding: 12px 20px;
+            border: 2px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 16px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .calculate-btn {
+            background: linear-gradient(135deg, #2563eb, #1d4ed8);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .calculate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(37, 99, 235, 0.4);
+        }
+
+        .result {
+            background: #dbeafe;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: center;
+            font-weight: bold;
+            color: #1e40af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>ClearVue Ltd</h1>
+            <div class="subtitle">Financial Calendar Visualization</div>
+        </div>
+
+        <div class="content">
+            <div class="explanation">
+                <h2>Understanding ClearVue's Unique Financial Calendar</h2>
+                <p>ClearVue's financial month runs from the <strong>last Saturday of the previous month</strong> to the <strong>last Friday of the current month</strong>. This structure aligns with retail weekend cycles and provides consistent 4-week reporting periods.</p>
+            </div>
+
+            <div class="controls">
+                <select id="monthSelector" class="month-selector">
+                    <option value="0">January 2025</option>
+                    <option value="1">February 2025</option>
+                    <option value="2">March 2025</option>
+                    <option value="3">April 2025</option>
+                    <option value="4">May 2025</option>
+                    <option value="5">June 2025</option>
+                    <option value="6">July 2025</option>
+                    <option value="7">August 2025</option>
+                    <option value="8">September 2025</option>
+                    <option value="9">October 2025</option>
+                    <option value="10">November 2025</option>
+                    <option value="11">December 2025</option>
+                </select>
+                <button onclick="updateCalendar()" class="calculate-btn">Update Calendar</button>
+            </div>
+
+            <div class="calendar-comparison">
+                <div class="calendar">
+                    <h3> Standard Calendar Month</h3>
+                    <div id="standardCalendar" class="calendar-grid">
+                        <!-- Standard calendar will be generated here -->
+                    </div>
+                    <div class="result" id="standardResult">
+                        Standard monthly reporting: 1st to last day
+                    </div>
+                </div>
+
+                <div class="calendar">
+                    <h3> ClearVue Financial Month</h3>
+                    <div id="financialCalendar" class="calendar-grid">
+                        <!-- Financial calendar will be generated here -->
+                    </div>
+                    <div class="result" id="financialResult">
+                        Financial period: Calculating...
+                    </div>
+                </div>
+            </div>
+
+            <div class="legend">
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #f1f5f9;"></div>
+                    <span>Outside Financial Period</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: linear-gradient(135deg, #10b981, #059669);"></div>
+                    <span>Financial Period Days</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-color" style="background: #dc2626;"></div>
+                    <span>Period Boundary</span>
+                </div>
+            </div>
+
+            <div class="key-points">
+                <h3> Business Impact & Benefits</h3>
+                <ul>
+                    <li>✅ Aligns reporting with weekend retail cycles</li>
+                    <li>✅ Consistent 4-week periods for accurate comparisons</li>
+                    <li>✅ Better inventory and sales performance analysis</li>
+                    <li>✅ Industry standard for retail and wholesale businesses</li>
+                    <li>✅ Eliminates partial-week reporting distortions</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Days of the week headers
+        const dayHeaders = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+        // Initialize on load
+        document.addEventListener('DOMContentLoaded', function() {
+            generateDayHeaders();
+            updateCalendar();
+        });
+
+        function generateDayHeaders() {
+            const standardGrid = document.getElementById('standardCalendar');
+            const financialGrid = document.getElementById('financialCalendar');
+            
+            // Clear existing content
+            standardGrid.innerHTML = '';
+            financialGrid.innerHTML = '';
+            
+            // Add day headers to both calendars
+            dayHeaders.forEach(day => {
+                const headerDay = document.createElement('div');
+                headerDay.className = 'day-header';
+                headerDay.textContent = day;
+                standardGrid.appendChild(headerDay.cloneNode(true));
+                financialGrid.appendChild(headerDay);
+            });
+        }
+
+        function updateCalendar() {
+            const monthSelect = document.getElementById('monthSelector');
+            const selectedMonth = parseInt(monthSelect.value);
+            const year = 2025;
+            
+            generateStandardCalendar(selectedMonth, year);
+            generateFinancialCalendar(selectedMonth, year);
+        }
+
+        function generateStandardCalendar(month, year) {
+            const calendarGrid = document.getElementById('standardCalendar');
+            const resultDiv = document.getElementById('standardResult');
+            
+            // Clear previous days (keep headers)
+            const headers = Array.from(calendarGrid.querySelectorAll('.day-header'));
+            calendarGrid.innerHTML = '';
+            headers.forEach(header => calendarGrid.appendChild(header));
+            
+            const firstDay = new Date(year, month, 1);
+            const lastDay = new Date(year, month + 1, 0);
+            const startDate = new Date(firstDay);
+            
+            // Adjust to start on Sunday
+            startDate.setDate(firstDay.getDate() - firstDay.getDay());
+            
+            // Generate 42 days (6 weeks)
+            for (let i = 0; i < 42; i++) {
+                const currentDate = new Date(startDate);
+                currentDate.setDate(startDate.getDate() + i);
+                
+                const dayElement = document.createElement('div');
+                dayElement.className = 'day';
+                dayElement.textContent = currentDate.getDate();
+                
+                // Highlight current month days
+                if (currentDate.getMonth() !== month) {
+                    dayElement.classList.add('outside-period');
+                }
+                
+                // Highlight first and last day
+                if (currentDate.getDate() === 1 && currentDate.getMonth() === month) {
+                    dayElement.classList.add('period-marker');
+                } else if (currentDate.getDate() === lastDay.getDate() && currentDate.getMonth() === month) {
+                    dayElement.classList.add('period-marker');
+                }
+                
+                calendarGrid.appendChild(dayElement);
+            }
+            
+            resultDiv.textContent = `Standard monthly reporting: ${firstDay.toLocaleDateString()} to ${lastDay.toLocaleDateString()}`;
+        }
+
+        function generateFinancialCalendar(month, year) {
+            const calendarGrid = document.getElementById('financialCalendar');
+            const resultDiv = document.getElementById('financialResult');
+            
+            // Clear previous days (keep headers)
+            const headers = Array.from(calendarGrid.querySelectorAll('.day-header'));
+            calendarGrid.innerHTML = '';
+            headers.forEach(header => calendarGrid.appendChild(header));
+            
+            // Calculate financial period
+            const financialPeriod = calculateFinancialPeriod(month, year);
+            
+            const startDate = new Date(financialPeriod.periodStart);
+            const endDate = new Date(financialPeriod.periodEnd);
+            
+            // Adjust to start on Sunday
+            startDate.setDate(financialPeriod.periodStart.getDate() - financialPeriod.periodStart.getDay());
+            
+            // Generate 42 days (6 weeks)
+            for (let i = 0; i < 42; i++) {
+                const currentDate = new Date(startDate);
+                currentDate.setDate(startDate.getDate() + i);
+                
+                const dayElement = document.createElement('div');
+                dayElement.className = 'day';
+                dayElement.textContent = currentDate.getDate();
+                
+                // Check if date is within financial period
+                if (currentDate >= financialPeriod.periodStart && currentDate <= financialPeriod.periodEnd) {
+                    dayElement.classList.add('financial-period');
+                } else {
+                    dayElement.classList.add('outside-period');
+                }
+                
+                // Highlight period boundaries
+                if (currentDate.getTime() === financialPeriod.periodStart.getTime() || 
+                    currentDate.getTime() === financialPeriod.periodEnd.getTime()) {
+                    dayElement.classList.add('period-marker');
+                }
+                
+                calendarGrid.appendChild(dayElement);
+            }
+            
+            resultDiv.textContent = `Financial period: ${financialPeriod.periodStart.toLocaleDateString()} to ${financialPeriod.periodEnd.toLocaleDateString()}`;
+        }
+
+        function calculateFinancialPeriod(month, year) {
+            // Get last day of current month
+            const lastDay = new Date(year, month + 1, 0);
+            
+            // Find last Friday of current month
+            const lastFriday = new Date(lastDay);
+            lastFriday.setDate(lastDay.getDate() - ((lastDay.getDay() + 1) % 7));
+            
+            // Get last day of previous month
+            const lastDayPrev = new Date(year, month, 0);
+            
+            // Find last Saturday of previous month
+            const lastSaturdayPrev = new Date(lastDayPrev);
+            lastSaturdayPrev.setDate(lastDayPrev.getDate() - ((lastDayPrev.getDay() + 2) % 7));
+            
+            return {
+                periodStart: lastSaturdayPrev,
+                periodEnd: lastFriday,
+                financialPeriod: `${year}-M${(month + 1).toString().padStart(2, '0')}`
+            };
+        }
+    </script>
+</body>
+</html>
